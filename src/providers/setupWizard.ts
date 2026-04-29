@@ -19,7 +19,7 @@ export async function runSetupWizard(
             { label: '$(github) GitHub', description: 'Issues & Pull Requests', _id: 'github' as ProviderId },
             { label: '$(globe) Jira Cloud', description: 'Atlassian Cloud (*.atlassian.net)', _id: 'jira' as ProviderId, _hosting: 'cloud' },
             { label: '$(server) Jira Server / Data Center', description: 'Self-hosted Jira', _id: 'jira' as ProviderId, _hosting: 'server' },
-        ], { placeHolder: 'Select a ticket provider', title: 'KeepR: Add Provider Connection' });
+        ], { placeHolder: 'Select a ticket provider', title: 'KeepR: Add Provider Connection', ignoreFocusOut: true });
         if (!typePick) { return undefined; }
         providerType = typePick._id;
 
@@ -45,6 +45,7 @@ async function runAzureDevOpsWizard(
         title: 'Azure DevOps: Organization URL',
         prompt: 'e.g. https://dev.azure.com/myorg',
         value: existing?.config.orgUrl ?? '',
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'URL is required',
     });
     if (orgUrl === undefined) { return undefined; }
@@ -53,6 +54,7 @@ async function runAzureDevOpsWizard(
         title: 'Azure DevOps: Project Name',
         prompt: 'The project containing your work items',
         value: existing?.config.project ?? '',
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Project is required',
     });
     if (project === undefined) { return undefined; }
@@ -61,6 +63,7 @@ async function runAzureDevOpsWizard(
         title: 'Azure DevOps: Personal Access Token',
         prompt: 'Scope: Work Items (Read) + Code (Read) for branches/PRs',
         password: true,
+        ignoreFocusOut: true,
         placeHolder: 'Paste PAT here…',
     });
     if (pat === undefined) { return undefined; }
@@ -69,6 +72,7 @@ async function runAzureDevOpsWizard(
         title: 'Connection Name',
         prompt: 'A friendly name for this connection',
         value: existing?.name ?? `${project} (Azure DevOps)`,
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Name is required',
     });
     if (name === undefined) { return undefined; }
@@ -94,6 +98,7 @@ async function runGitHubWizard(
         title: 'GitHub: Repository Owner',
         prompt: 'GitHub user or organization (e.g. Wolfskii)',
         value: existing?.config.owner ?? '',
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Owner is required',
     });
     if (owner === undefined) { return undefined; }
@@ -102,6 +107,7 @@ async function runGitHubWizard(
         title: 'GitHub: Repository Name',
         prompt: 'e.g. KeepR',
         value: existing?.config.repo ?? '',
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Repo name is required',
     });
     if (repo === undefined) { return undefined; }
@@ -110,6 +116,7 @@ async function runGitHubWizard(
         title: 'GitHub: Personal Access Token (optional for public repos)',
         prompt: 'Scope: repo (private) or public_repo (public only)',
         password: true,
+        ignoreFocusOut: true,
         placeHolder: 'Paste token or leave empty…',
     });
     if (token === undefined) { return undefined; }
@@ -118,6 +125,7 @@ async function runGitHubWizard(
         title: 'Connection Name',
         prompt: 'A friendly name for this connection',
         value: existing?.name ?? `${owner}/${repo}`,
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Name is required',
     });
     if (name === undefined) { return undefined; }
@@ -148,6 +156,7 @@ async function runJiraWizard(
             ? 'e.g. https://jira.mycompany.com'
             : 'e.g. https://mycompany.atlassian.net',
         value: existing?.config.baseUrl ?? '',
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'URL is required',
     });
     if (baseUrl === undefined) { return undefined; }
@@ -158,6 +167,7 @@ async function runJiraWizard(
             title: 'Jira Cloud: Account Email',
             prompt: 'Your Atlassian account email',
             value: existing?.config.email ?? '',
+            ignoreFocusOut: true,
             validateInput: (v) => v.trim() ? undefined : 'Email is required for Jira Cloud',
         });
         if (emailInput === undefined) { return undefined; }
@@ -167,6 +177,7 @@ async function runJiraWizard(
             title: 'Jira Server: Username (optional)',
             prompt: 'Leave empty for PAT-only (Bearer) auth',
             value: existing?.config.email ?? '',
+            ignoreFocusOut: true,
         });
         if (usernameInput === undefined) { return undefined; }
         email = usernameInput.trim();
@@ -178,6 +189,7 @@ async function runJiraWizard(
             ? 'For PAT-only auth leave username empty above'
             : 'Generate at id.atlassian.com/manage-profile/security/api-tokens',
         password: true,
+        ignoreFocusOut: true,
         placeHolder: 'Paste token here…',
         validateInput: (v) => v.trim() ? undefined : 'Token is required',
     });
@@ -187,6 +199,7 @@ async function runJiraWizard(
         title: 'Connection Name',
         prompt: 'A friendly name for this connection',
         value: existing?.name ?? `Jira ${isServer ? 'Server' : 'Cloud'}`,
+        ignoreFocusOut: true,
         validateInput: (v) => v.trim() ? undefined : 'Name is required',
     });
     if (name === undefined) { return undefined; }

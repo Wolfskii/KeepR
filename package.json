@@ -97,18 +97,6 @@
                 "icon": "$(bookmark)"
             },
             {
-                "command": "keepr.setAzureDevOpsPat",
-                "title": "KeepR: Set Azure DevOps PAT"
-            },
-            {
-                "command": "keepr.setGitHubToken",
-                "title": "KeepR: Set GitHub Token"
-            },
-            {
-                "command": "keepr.setJiraToken",
-                "title": "KeepR: Set Jira API Token"
-            },
-            {
                 "command": "keepr.setupProvider",
                 "title": "KeepR: Set Up Ticket Provider",
                 "icon": "$(plug)"
@@ -210,22 +198,22 @@
             "view/item/context": [
                 {
                     "command": "keepr.editBookmark",
-                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
                     "group": "inline@1"
                 },
                 {
                     "command": "keepr.removeBookmark",
-                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
                     "group": "inline@2"
                 },
                 {
                     "command": "keepr.editBookmark",
-                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
                     "group": "1_actions@1"
                 },
                 {
                     "command": "keepr.removeBookmark",
-                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
                     "group": "1_actions@2"
                 },
                 {
