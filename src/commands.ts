@@ -3,7 +3,7 @@ import { BookmarkStatus } from './models';
 import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
-import { AzureDevOpsService } from './azureDevOps';
+import { ProviderManager } from './providers';
 import { pickTicket } from './ticketPicker';
 
 /**
@@ -15,7 +15,7 @@ export function registerCommands(
     treeProvider: BookmarkTreeProvider,
     decorations: DecorationManager,
     treeView: vscode.TreeView<any>,
-    azdo: AzureDevOpsService,
+    providers: ProviderManager,
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
 
@@ -100,7 +100,7 @@ export function registerCommands(
             if (label === undefined) { return; } // cancelled
 
             // Ticket / PBI
-            const ticket = await pickTicket(azdo);
+            const ticket = await pickTicket(providers);
             if (ticket === undefined) { return; }
 
             // Status
@@ -183,7 +183,7 @@ export function registerCommands(
                     break;
                 }
                 case 'Ticket': {
-                    const ticket = await pickTicket(azdo, bookmark.ticket);
+                    const ticket = await pickTicket(providers, bookmark.ticket);
                     if (ticket === undefined) { return; }
                     await store.updateBookmark(bookmarkId, { ticket: ticket || undefined });
                     break;
@@ -385,7 +385,7 @@ export function registerCommands(
         }),
     );
 
-    // ── Set Azure DevOps PAT (secure storage) ────────────
+    // ── Set Provider Token (secure storage) ───────────────
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setAzureDevOpsPat', async () => {
@@ -395,12 +395,75 @@ export function registerCommands(
                 password: true,
             });
             if (pat === undefined) { return; }
-            if (pat) {
-                await azdo.storePat(pat);
+            const azdo = providers.getProvider('azureDevOps');
+            if (azdo) {
+                await azdo.storeToken(pat);
                 vscode.window.showInformationMessage('KeepR: Azure DevOps PAT saved securely.');
-            } else {
-                await azdo.storePat('');
-                vscode.window.showInformationMessage('KeepR: Azure DevOps PAT cleared.');
+            }
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setGitHubToken', async () => {
+            const token = await vscode.window.showInputBox({
+                prompt: 'Enter your GitHub Personal Access Token',
+                placeHolder: 'Paste token here…',
+                password: true,
+            });
+            if (token === undefined) { return; }
+            const gh = providers.getProvider('github');
+            if (gh) {
+                await gh.storeToken(token);
+                vscode.window.showInformationMessage('KeepR: GitHub token saved securely.');
+            }
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setJiraToken', async () => {
+            const token = await vscode.window.showInputBox({
+                prompt: 'Enter your Jira API Token',
+                placeHolder: 'Paste token here…',
+                password: true,
+            });
+            if (token === undefined) { return; }
+            const jira = providers.getProvider('jira');
+            if (jira) {
+                await jira.storeToken(token);
+                vscode.window.showInformationMessage('KeepR: Jira API token saved securely.');
+            }
+        }),
+    );
+
+    // ── Setup Provider (walkthrough) ──────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setupProvider', async () => {
+            const items: (vscode.QuickPickItem & { _id: string })[] = [
+                { label: '$(azure-devops) Azure DevOps', description: 'Connect to Azure DevOps work items', _id: 'azureDevOps' },
+                { label: '$(github) GitHub', description: 'Connect to GitHub Issues & PRs', _id: 'github' },
+                { label: '$(globe) Jira', description: 'Connect to Jira issues', _id: 'jira' },
+            ];
+
+            const pick = await vscode.window.showQuickPick(items, {
+                placeHolder: 'Choose a ticket provider to set up',
+            });
+            if (!pick) { return; }
+
+            // Set the provider in settings
+            await vscode.workspace.getConfiguration('keepr').update('ticketProvider', pick._id, vscode.ConfigurationTarget.Global);
+
+            // Open the relevant settings for the chosen provider
+            switch (pick._id) {
+                case 'azureDevOps':
+                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.azureDevOps');
+                    break;
+                case 'github':
+                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.github');
+                    break;
+                case 'jira':
+                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.jira');
+                    break;
             }
         }),
     );
@@ -427,17 +490,12 @@ export function registerCommands(
                 return;
             }
 
-            const config = vscode.workspace.getConfiguration('keepr.azureDevOps');
-            const orgUrl = config.get<string>('orgUrl');
-            const project = config.get<string>('project');
-
-            if (!orgUrl || !project) {
-                vscode.window.showWarningMessage('Configure keepr.azureDevOps.orgUrl and project to open tickets.');
+            const url = providers.getTicketUrl(ticket);
+            if (!url) {
+                vscode.window.showWarningMessage('Configure a ticket provider in settings to open tickets.');
                 return;
             }
 
-            const id = ticket.replace(/^#/, '');
-            const url = `${orgUrl.replace(/\/+$/, '')}/${encodeURIComponent(project)}/_workitems/edit/${encodeURIComponent(id)}`;
             await vscode.env.openExternal(vscode.Uri.parse(url));
         }),
 

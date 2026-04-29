@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Bookmark, BookmarkStatus, RepoBookmarks, statusIcon } from './models';
 import { BookmarkStore } from './store';
-import { AzureDevOpsService, WorkItemDetails } from './azureDevOps';
+import { ProviderManager, TicketDetails } from './providers';
 
 type GroupBy = 'repo' | 'file' | 'status' | 'ticket';
 
@@ -53,13 +53,13 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private ticketFilter: string | undefined;
   /** Per-repo collapse state (repoName → collapsed) */
   private collapsedRepos = new Map<string, boolean>();
-  /** Cached work item details for enriching tree items */
-  private workItemCache = new Map<string, WorkItemDetails | null>();
+  /** Cached ticket details for enriching tree items */
+  private workItemCache = new Map<string, TicketDetails | null>();
   private pendingFetches = new Set<string>();
 
   constructor(
     private readonly store: BookmarkStore,
-    private readonly azdo?: AzureDevOpsService,
+    private readonly providers?: ProviderManager,
   ) {
     const config = vscode.workspace.getConfiguration('keepr');
     this.groupBy = config.get<GroupBy>('defaultGroupBy', 'repo');
@@ -358,28 +358,22 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   private getTicketUrl(ticket: string): string | undefined {
-    const config = vscode.workspace.getConfiguration('keepr.azureDevOps');
-    const orgUrl = config.get<string>('orgUrl');
-    const project = config.get<string>('project');
-    if (!orgUrl || !project || !ticket) { return undefined; }
-    // If ticket is numeric, link directly to the work item
-    const id = ticket.replace(/^#/, '');
-    return `${orgUrl.replace(/\/+$/, '')}/${encodeURIComponent(project)}/_workitems/edit/${encodeURIComponent(id)}`;
+    return this.providers?.getTicketUrl(ticket);
   }
 
   // ── Async work item fetching ─────────────────────────
 
-  private getCachedWorkItem(ticket: string): WorkItemDetails | undefined {
+  private getCachedWorkItem(ticket: string): TicketDetails | undefined {
     const cached = this.workItemCache.get(ticket);
     return cached ?? undefined;
   }
 
   private fetchWorkItemAsync(ticket: string): void {
-    if (!this.azdo?.isConfigured()) { return; }
+    if (!this.providers?.isConfigured()) { return; }
     if (this.workItemCache.has(ticket) || this.pendingFetches.has(ticket)) { return; }
 
     this.pendingFetches.add(ticket);
-    this.azdo.getWorkItemDetails(ticket).then((details) => {
+    this.providers.getTicketDetails(ticket).then((details) => {
       this.pendingFetches.delete(ticket);
       this.workItemCache.set(ticket, details ?? null);
       if (details) {
@@ -394,7 +388,7 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   /** Force re-fetch all work item data */
   refreshWorkItems(): void {
     this.workItemCache.clear();
-    this.azdo?.clearCache();
+    this.providers?.clearCache();
     this.refresh();
   }
 

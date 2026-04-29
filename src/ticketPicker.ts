@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import { AzureDevOpsService, WorkItem } from './azureDevOps';
+import { ProviderManager, TicketInfo } from './providers';
 
 /** Work-item type → codicon mapping */
-function workItemIcon(type: string): string {
+function ticketIcon(type: string): string {
     switch (type.toLowerCase()) {
         case 'bug': return '$(bug)';
         case 'task': return '$(tasklist)';
@@ -11,24 +11,26 @@ function workItemIcon(type: string): string {
         case 'feature': return '$(rocket)';
         case 'epic': return '$(milestone)';
         case 'issue': return '$(issues)';
+        case 'pull request': return '$(git-pull-request)';
+        case 'story': return '$(book)';
         default: return '$(circle)';
     }
 }
 
 /**
  * Shows a QuickPick that lets the user either:
- *  - Search Azure DevOps work items (if configured)
+ *  - Search tickets via the active provider (if configured)
  *  - Type a ticket number manually
  *  - Skip (empty)
  *
  * Returns the chosen ticket string, empty string for "(none)", or undefined if cancelled.
  */
 export async function pickTicket(
-    azdo: AzureDevOpsService,
+    providers: ProviderManager,
     currentValue?: string,
 ): Promise<string | undefined> {
-    if (!azdo.isConfigured()) {
-        // No Azure DevOps configured — fall back to simple input box
+    if (!providers.isConfigured()) {
+        // No provider configured — fall back to simple input box
         return vscode.window.showInputBox({
             prompt: 'Ticket / PBI number (optional)',
             placeHolder: 'e.g. "419046" or "FEAT-123"',
@@ -38,8 +40,9 @@ export async function pickTicket(
 
     return new Promise<string | undefined>((resolve) => {
         const qp = vscode.window.createQuickPick<vscode.QuickPickItem & { _ticket?: string }>();
+        const providerName = providers.activeProvider?.displayName ?? 'tickets';
         qp.title = 'Ticket / PBI';
-        qp.placeholder = 'Search Azure DevOps or type a number…';
+        qp.placeholder = `Search ${providerName} or type a number…`;
         qp.value = currentValue ?? '';
         qp.matchOnDescription = true;
         qp.matchOnDetail = true;
@@ -62,11 +65,11 @@ export async function pickTicket(
             alwaysShow: true,
         };
 
-        function workItemToItem(wi: WorkItem): vscode.QuickPickItem & { _ticket: string } {
+        function ticketToItem(ti: TicketInfo): vscode.QuickPickItem & { _ticket: string } {
             return {
-                label: `${workItemIcon(wi.type)} #${wi.id} — ${wi.title}`,
-                description: `${wi.type} · ${wi.state}${wi.assignedTo ? ` · ${wi.assignedTo}` : ''}`,
-                _ticket: String(wi.id),
+                label: `${ticketIcon(ti.type)} #${ti.id} — ${ti.title}`,
+                description: `${ti.type} · ${ti.state}${ti.assignedTo ? ` · ${ti.assignedTo}` : ''}`,
+                _ticket: String(ti.id),
                 alwaysShow: true,
             };
         }
@@ -82,13 +85,13 @@ export async function pickTicket(
 
             qp.busy = true;
             try {
-                const results = await azdo.searchWorkItems(query);
+                const results = await providers.searchTickets(query);
                 // Only update if query hasn't changed while we were fetching
                 if (qp.value === query) {
                     const items: (vscode.QuickPickItem & { _ticket?: string })[] = [];
                     items.push(manualItem(query));
-                    for (const wi of results) {
-                        items.push(workItemToItem(wi));
+                    for (const ti of results) {
+                        items.push(ticketToItem(ti));
                     }
                     items.push(noneItem);
                     qp.items = items;
@@ -108,7 +111,7 @@ export async function pickTicket(
                 noneItem,
             ];
 
-            // Debounce the Azure DevOps search
+            // Debounce the provider search
             if (value.length >= 2) {
                 searchTimer = setTimeout(() => doSearch(value), 350);
             }

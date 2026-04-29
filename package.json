@@ -101,6 +101,19 @@
                 "title": "KeepR: Set Azure DevOps PAT"
             },
             {
+                "command": "keepr.setGitHubToken",
+                "title": "KeepR: Set GitHub Token"
+            },
+            {
+                "command": "keepr.setJiraToken",
+                "title": "KeepR: Set Jira API Token"
+            },
+            {
+                "command": "keepr.setupProvider",
+                "title": "KeepR: Set Up Ticket Provider",
+                "icon": "$(plug)"
+            },
+            {
                 "command": "keepr.openTicket",
                 "title": "KeepR: Open Ticket in Browser",
                 "icon": "$(link-external)"
@@ -302,6 +315,23 @@
                     ],
                     "description": "Available status labels for bookmarks"
                 },
+                "keepr.ticketProvider": {
+                    "type": "string",
+                    "default": "",
+                    "enum": [
+                        "",
+                        "azureDevOps",
+                        "github",
+                        "jira"
+                    ],
+                    "enumDescriptions": [
+                        "None — manual ticket entry only",
+                        "Azure DevOps — search work items, show state & branches",
+                        "GitHub — search issues & PRs, show state & branches",
+                        "Jira — search issues, show state & branches"
+                    ],
+                    "description": "Active ticket provider for search and live status"
+                },
                 "keepr.azureDevOps.orgUrl": {
                     "type": "string",
                     "default": "",
@@ -316,6 +346,36 @@
                     "type": "string",
                     "default": "",
                     "description": "Personal Access Token (prefer using the 'KeepR: Set Azure DevOps PAT' command for secure storage)"
+                },
+                "keepr.github.owner": {
+                    "type": "string",
+                    "default": "",
+                    "description": "GitHub repository owner (user or org)"
+                },
+                "keepr.github.repo": {
+                    "type": "string",
+                    "default": "",
+                    "description": "GitHub repository name"
+                },
+                "keepr.github.token": {
+                    "type": "string",
+                    "default": "",
+                    "description": "GitHub Personal Access Token (prefer using the 'KeepR: Set GitHub Token' command for secure storage)"
+                },
+                "keepr.jira.baseUrl": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Jira instance base URL (e.g. https://mycompany.atlassian.net)"
+                },
+                "keepr.jira.email": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Jira account email address"
+                },
+                "keepr.jira.apiToken": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Jira API Token (prefer using the 'KeepR: Set Jira API Token' command for secure storage)"
                 }
             }
         }
