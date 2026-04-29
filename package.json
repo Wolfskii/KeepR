@@ -6,7 +6,7 @@
     "publisher": "wolfskii",
     "repository": {
         "type": "git",
-        "url": "https://github.com/wolfskii/keepr"
+        "url": "https://github.com/Wolfskii/KeepR"
     },
     "engines": {
         "vscode": "^1.85.0"
