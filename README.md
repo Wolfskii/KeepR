@@ -73,11 +73,21 @@ On first install, KeepR will prompt you to connect a provider. You can also run 
 
 #### Jira
 
+**Jira Cloud** (default):
+
 1. Set `keepr.ticketProvider` to `jira`
 2. Set `keepr.jira.baseUrl` (e.g. `https://mycompany.atlassian.net`)
 3. Set `keepr.jira.email` (your Jira account email)
 4. Run **KeepR: Set Jira API Token** and paste your API token
    - Generate at: [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+
+**Jira Server / Data Center** (self-hosted):
+
+1. Set `keepr.ticketProvider` to `jira`
+2. Set `keepr.jira.hosting` to `server`
+3. Set `keepr.jira.baseUrl` (e.g. `https://jira.mycompany.com`)
+4. Run **KeepR: Set Jira API Token** and paste your token
+5. Optionally set `keepr.jira.email` to your Jira username (for Basic auth). If left empty, Bearer PAT auth is used.
 
 ---
 
@@ -138,6 +148,7 @@ Default statuses: To Fix, Bug, Performance, Bad Practice, To Implement, Review, 
 | `keepr.azureDevOps.orgUrl` | Organization URL (`https://dev.azure.com/myorg`) |
 | `keepr.azureDevOps.project` | Project name |
 | `keepr.azureDevOps.pat` | PAT (prefer using the secure command instead) |
+
 </details>
 
 <details>
@@ -148,6 +159,7 @@ Default statuses: To Fix, Bug, Performance, Bad Practice, To Implement, Review, 
 | `keepr.github.owner` | Repository owner (user or org) |
 | `keepr.github.repo` | Repository name |
 | `keepr.github.token` | Token (prefer using the secure command instead) |
+
 </details>
 
 <details>
@@ -155,9 +167,11 @@ Default statuses: To Fix, Bug, Performance, Bad Practice, To Implement, Review, 
 
 | Setting | Description |
 |---|---|
-| `keepr.jira.baseUrl` | Instance URL (`https://mycompany.atlassian.net`) |
-| `keepr.jira.email` | Account email |
+| `keepr.jira.hosting` | Hosting type: `cloud` (default) or `server` (self-hosted Server/DC) |
+| `keepr.jira.baseUrl` | Instance URL (`https://mycompany.atlassian.net` or `https://jira.mycompany.com`) |
+| `keepr.jira.email` | Cloud: account email. Server: username (optional — leave empty for PAT auth) |
 | `keepr.jira.apiToken` | API token (prefer using the secure command instead) |
+
 </details>
 
 ---

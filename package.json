@@ -362,15 +362,28 @@
                     "default": "",
                     "description": "GitHub Personal Access Token (prefer using the 'KeepR: Set GitHub Token' command for secure storage)"
                 },
+                "keepr.jira.hosting": {
+                    "type": "string",
+                    "default": "cloud",
+                    "enum": [
+                        "cloud",
+                        "server"
+                    ],
+                    "enumDescriptions": [
+                        "Jira Cloud (*.atlassian.net) — uses REST API v3 with email + API token",
+                        "Jira Server / Data Center (self-hosted) — uses REST API v2 with username + password or PAT"
+                    ],
+                    "description": "Jira hosting type: 'cloud' for Atlassian Cloud or 'server' for self-hosted Jira Server / Data Center"
+                },
                 "keepr.jira.baseUrl": {
                     "type": "string",
                     "default": "",
-                    "description": "Jira instance base URL (e.g. https://mycompany.atlassian.net)"
+                    "description": "Jira instance base URL (e.g. https://mycompany.atlassian.net for Cloud, or https://jira.mycompany.com for Server)"
                 },
                 "keepr.jira.email": {
                     "type": "string",
                     "default": "",
-                    "description": "Jira account email address"
+                    "description": "Jira Cloud: account email address. Jira Server: username. Leave empty for PAT-only auth on Server/DC."
                 },
                 "keepr.jira.apiToken": {
                     "type": "string",

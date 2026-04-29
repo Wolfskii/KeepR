@@ -9,6 +9,15 @@ export class JiraProvider implements TicketProvider {
     private detailsCache = new Map<string, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
 
+    private get hosting(): 'cloud' | 'server' {
+        const val = vscode.workspace.getConfiguration('keepr.jira').get<string>('hosting');
+        return val === 'server' ? 'server' : 'cloud';
+    }
+
+    private get isServer(): boolean {
+        return this.hosting === 'server';
+    }
+
     private get baseUrl(): string | undefined {
         return vscode.workspace.getConfiguration('keepr.jira').get<string>('baseUrl');
     }
@@ -23,11 +32,20 @@ export class JiraProvider implements TicketProvider {
         return vscode.workspace.getConfiguration('keepr.jira').get<string>('apiToken');
     }
 
+    /** REST API base: v3 for Cloud, v2 for Server/DC */
+    private get apiVersion(): string {
+        return this.isServer ? '2' : '3';
+    }
+
     initSecrets(secrets: vscode.SecretStorage): void {
         this._secrets = secrets;
     }
 
     isConfigured(): boolean {
+        // Cloud requires email; Server can use PAT-only (no email/username needed)
+        if (this.isServer) {
+            return !!this.baseUrl;
+        }
         return !!(this.baseUrl && this.email);
     }
 
@@ -46,7 +64,8 @@ export class JiraProvider implements TicketProvider {
         const baseUrl = this.baseUrl;
         const email = this.email;
         const token = await this.getToken();
-        if (!baseUrl || !email || !token) { return []; }
+        if (!baseUrl || !token) { return []; }
+        if (!this.isServer && !email) { return []; }
 
         try {
             const headers = this.authHeaders(email, token);
@@ -57,7 +76,7 @@ export class JiraProvider implements TicketProvider {
                 ? `key = "${this.escapeJql(query.trim())}"`
                 : `summary ~ "${this.escapeJql(query)}" ORDER BY updated DESC`;
 
-            const url = `${this.normalizeUrl(baseUrl)}/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=15&fields=summary,issuetype,status,assignee`;
+            const url = `${this.normalizeUrl(baseUrl)}/rest/api/${this.apiVersion}/search?jql=${encodeURIComponent(jql)}&maxResults=15&fields=summary,issuetype,status,assignee`;
 
             const resp = await fetch(url, { headers });
 
@@ -90,14 +109,15 @@ export class JiraProvider implements TicketProvider {
         const baseUrl = this.baseUrl;
         const email = this.email;
         const token = await this.getToken();
-        if (!baseUrl || !email || !token) { return undefined; }
+        if (!baseUrl || !token) { return undefined; }
+        if (!this.isServer && !email) { return undefined; }
 
         try {
             const headers = this.authHeaders(email, token);
             const base = this.normalizeUrl(baseUrl);
 
             // Fetch issue with status and development info
-            const issueUrl = `${base}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,issuetype,status,assignee`;
+            const issueUrl = `${base}/rest/api/${this.apiVersion}/issue/${encodeURIComponent(key)}?fields=summary,issuetype,status,assignee`;
             const issueResp = await fetch(issueUrl, { headers });
             if (!issueResp.ok) { return undefined; }
             const issue = await issueResp.json() as JiraIssue;
@@ -173,9 +193,17 @@ export class JiraProvider implements TicketProvider {
         return text.replace(/["\\]/g, '\\$&');
     }
 
-    private authHeaders(email: string, token: string): Record<string, string> {
+    private authHeaders(email: string | undefined, token: string): Record<string, string> {
+        // Server/DC without email/username: use Bearer PAT auth
+        if (this.isServer && !email) {
+            return {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+            };
+        }
+        // Cloud (email:apiToken) or Server with username (username:password)
         return {
-            'Authorization': `Basic ${Buffer.from(email + ':' + token).toString('base64')}`,
+            'Authorization': `Basic ${Buffer.from((email ?? '') + ':' + token).toString('base64')}`,
             'Accept': 'application/json',
         };
     }
