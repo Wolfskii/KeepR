@@ -3,7 +3,7 @@ import { BookmarkStatus } from './models';
 import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
-import { ProviderManager } from './providers';
+import { ProviderManager, ConnectionStore, runSetupWizard } from './providers';
 import { pickTicket } from './ticketPicker';
 
 /**
@@ -389,6 +389,12 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setAzureDevOpsPat', async () => {
+            const connStore = providers.connectionStore;
+            if (connStore) {
+                // Multi-connection mode — run full wizard for Azure DevOps
+                await runSetupWizard(connStore);
+                return;
+            }
             const pat = await vscode.window.showInputBox({
                 prompt: 'Enter your Azure DevOps Personal Access Token',
                 placeHolder: 'Paste PAT here…',
@@ -405,6 +411,11 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setGitHubToken', async () => {
+            const connStore = providers.connectionStore;
+            if (connStore) {
+                await runSetupWizard(connStore);
+                return;
+            }
             const token = await vscode.window.showInputBox({
                 prompt: 'Enter your GitHub Personal Access Token',
                 placeHolder: 'Paste token here…',
@@ -421,6 +432,11 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setJiraToken', async () => {
+            const connStore = providers.connectionStore;
+            if (connStore) {
+                await runSetupWizard(connStore);
+                return;
+            }
             const token = await vscode.window.showInputBox({
                 prompt: 'Enter your Jira API Token',
                 placeHolder: 'Paste token here…',
@@ -435,35 +451,140 @@ export function registerCommands(
         }),
     );
 
-    // ── Setup Provider (walkthrough) ──────────────────
+    // ── Setup Provider (interactive wizard) ──────────────────
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setupProvider', async () => {
+            const connStore = providers.connectionStore;
+            if (connStore) {
+                await runSetupWizard(connStore);
+                return;
+            }
+            // Legacy fallback: open settings
             const items: (vscode.QuickPickItem & { _id: string })[] = [
                 { label: '$(azure-devops) Azure DevOps', description: 'Connect to Azure DevOps work items', _id: 'azureDevOps' },
                 { label: '$(github) GitHub', description: 'Connect to GitHub Issues & PRs', _id: 'github' },
                 { label: '$(globe) Jira', description: 'Connect to Jira issues', _id: 'jira' },
             ];
-
             const pick = await vscode.window.showQuickPick(items, {
                 placeHolder: 'Choose a ticket provider to set up',
             });
             if (!pick) { return; }
-
-            // Set the provider in settings
             await vscode.workspace.getConfiguration('keepr').update('ticketProvider', pick._id, vscode.ConfigurationTarget.Global);
+            await vscode.commands.executeCommand('workbench.action.openSettings', `keepr.${pick._id}`);
+        }),
+    );
 
-            // Open the relevant settings for the chosen provider
-            switch (pick._id) {
-                case 'azureDevOps':
-                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.azureDevOps');
-                    break;
-                case 'github':
-                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.github');
-                    break;
-                case 'jira':
-                    await vscode.commands.executeCommand('workbench.action.openSettings', 'keepr.jira');
-                    break;
+    // ── Add Connection (same wizard as setupProvider) ──────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.addConnection', async () => {
+            const connStore = providers.connectionStore;
+            if (!connStore) { return; }
+            await runSetupWizard(connStore);
+        }),
+    );
+
+    // ── Edit Connection ──────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.editConnection', async (arg?: string | { connection?: { id: string } }) => {
+            const connStore = providers.connectionStore;
+            if (!connStore) { return; }
+
+            let connectionId: string | undefined;
+            if (typeof arg === 'string') { connectionId = arg; }
+            else if (arg?.connection?.id) { connectionId = arg.connection.id; }
+
+            if (!connectionId) {
+                // Pick from list
+                const connections = connStore.getAll();
+                if (connections.length === 0) {
+                    vscode.window.showInformationMessage('No connections configured. Use "Add Connection" first.');
+                    return;
+                }
+                const pick = await vscode.window.showQuickPick(
+                    connections.map(c => ({ label: c.name, description: c.type, _id: c.id })),
+                    { placeHolder: 'Select a connection to edit' },
+                );
+                if (!pick) { return; }
+                connectionId = pick._id;
+            }
+
+            const conn = connStore.get(connectionId);
+            if (!conn) { return; }
+            await runSetupWizard(connStore, conn);
+        }),
+    );
+
+    // ── Remove Connection ──────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.removeConnection', async (arg?: string | { connection?: { id: string } }) => {
+            const connStore = providers.connectionStore;
+            if (!connStore) { return; }
+
+            let connectionId: string | undefined;
+            if (typeof arg === 'string') { connectionId = arg; }
+            else if (arg?.connection?.id) { connectionId = arg.connection.id; }
+
+            if (!connectionId) {
+                const connections = connStore.getAll();
+                if (connections.length === 0) { return; }
+                const pick = await vscode.window.showQuickPick(
+                    connections.map(c => ({ label: c.name, description: c.type, _id: c.id })),
+                    { placeHolder: 'Select a connection to remove' },
+                );
+                if (!pick) { return; }
+                connectionId = pick._id;
+            }
+
+            const conn = connStore.get(connectionId);
+            if (!conn) { return; }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Remove connection "${conn.name}"?`,
+                { modal: true },
+                'Remove',
+            );
+            if (confirm !== 'Remove') { return; }
+
+            await connStore.remove(connectionId);
+            vscode.window.showInformationMessage(`KeepR: Connection "${conn.name}" removed.`);
+        }),
+    );
+
+    // ── Activate Connection ──────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.activateConnection', async (arg?: string | { connection?: { id: string } }) => {
+            const connStore = providers.connectionStore;
+            if (!connStore) { return; }
+
+            let connectionId: string | undefined;
+            if (typeof arg === 'string') { connectionId = arg; }
+            else if (arg?.connection?.id) { connectionId = arg.connection.id; }
+
+            if (!connectionId) {
+                const connections = connStore.getAll();
+                if (connections.length === 0) { return; }
+                const activeId = connStore.getActiveId();
+                const pick = await vscode.window.showQuickPick(
+                    connections.map(c => ({
+                        label: c.id === activeId ? `● ${c.name}` : c.name,
+                        description: c.type,
+                        _id: c.id,
+                    })),
+                    { placeHolder: 'Select the active connection' },
+                );
+                if (!pick) { return; }
+                connectionId = pick._id;
+            }
+
+            await connStore.setActiveId(connectionId);
+            const conn = connStore.get(connectionId);
+            if (conn) {
+                vscode.window.showInformationMessage(`KeepR: Active connection set to "${conn.name}".`);
             }
         }),
     );

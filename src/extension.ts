@@ -3,7 +3,7 @@ import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
 import { registerCommands } from './commands';
-import { ProviderManager } from './providers';
+import { ProviderManager, ConnectionStore, ProviderTreeProvider } from './providers';
 import { showOnboardingIfNeeded } from './onboarding';
 
 let store: BookmarkStore;
@@ -15,12 +15,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store = new BookmarkStore(context);
     await store.load();
 
+    // Connection store (multi-connection support)
+    const connectionStore = new ConnectionStore(context.globalState, context.secrets);
+
     // Ticket provider manager (Azure DevOps, GitHub, Jira)
     const providers = new ProviderManager();
     providers.initSecrets(context.secrets);
+    providers.initConnectionStore(connectionStore);
     providers.watchConfigChanges(context);
 
-    // Tree view
+    // Provider tree view (sidebar panel for managing connections)
+    const providerTree = new ProviderTreeProvider(connectionStore);
+    const providerTreeView = vscode.window.createTreeView('keepr.providersView', {
+        treeDataProvider: providerTree,
+    });
+    connectionStore.onDidChange(() => providerTree.refresh());
+
+    // Bookmarks tree view
     treeProvider = new BookmarkTreeProvider(store, providers);
     const treeView = vscode.window.createTreeView('keepr.bookmarksView', {
         treeDataProvider: treeProvider,
@@ -68,7 +79,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showOnboardingIfNeeded(context, providers);
 
     // Push disposables
-    context.subscriptions.push(treeView, store, treeProvider, decorations, providers, ...commandDisposables);
+    context.subscriptions.push(treeView, providerTreeView, store, treeProvider, decorations, providers, connectionStore, providerTree, ...commandDisposables);
 }
 
 export function deactivate(): void {

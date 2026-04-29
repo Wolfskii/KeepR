@@ -1,15 +1,31 @@
 import * as vscode from 'vscode';
 import { TicketProvider, TicketInfo, TicketDetails } from './types';
 
+export interface JiraConfig {
+    baseUrl: string;
+    email: string;
+    hosting: 'cloud' | 'server';
+}
+
 export class JiraProvider implements TicketProvider {
     readonly id = 'jira' as const;
     readonly displayName = 'Jira';
 
+    private _config: JiraConfig | undefined;
+    private _tokenGetter: (() => Promise<string | undefined>) | undefined;
+    private _tokenSetter: ((token: string) => Promise<void>) | undefined;
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<string, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
 
+    constructor(config?: JiraConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
+        this._config = config;
+        this._tokenGetter = tokenGetter;
+        this._tokenSetter = tokenSetter;
+    }
+
     private get hosting(): 'cloud' | 'server' {
+        if (this._config) { return this._config.hosting; }
         const val = vscode.workspace.getConfiguration('keepr.jira').get<string>('hosting');
         return val === 'server' ? 'server' : 'cloud';
     }
@@ -19,14 +35,17 @@ export class JiraProvider implements TicketProvider {
     }
 
     private get baseUrl(): string | undefined {
+        if (this._config) { return this._config.baseUrl; }
         return vscode.workspace.getConfiguration('keepr.jira').get<string>('baseUrl');
     }
 
     private get email(): string | undefined {
+        if (this._config) { return this._config.email; }
         return vscode.workspace.getConfiguration('keepr.jira').get<string>('email');
     }
 
     private async getToken(): Promise<string | undefined> {
+        if (this._tokenGetter) { return this._tokenGetter(); }
         const stored = await this._secrets?.get('keepr.jira.apiToken');
         if (stored) { return stored; }
         return vscode.workspace.getConfiguration('keepr.jira').get<string>('apiToken');
@@ -50,6 +69,7 @@ export class JiraProvider implements TicketProvider {
     }
 
     async storeToken(token: string): Promise<void> {
+        if (this._tokenSetter) { await this._tokenSetter(token); return; }
         await this._secrets?.store('keepr.jira.apiToken', token);
     }
 

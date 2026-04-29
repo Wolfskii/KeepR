@@ -1,23 +1,40 @@
 import * as vscode from 'vscode';
 import { TicketProvider, TicketInfo, TicketDetails } from './types';
 
+export interface GitHubConfig {
+    owner: string;
+    repo: string;
+}
+
 export class GitHubProvider implements TicketProvider {
     readonly id = 'github' as const;
     readonly displayName = 'GitHub';
 
+    private _config: GitHubConfig | undefined;
+    private _tokenGetter: (() => Promise<string | undefined>) | undefined;
+    private _tokenSetter: ((token: string) => Promise<void>) | undefined;
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<string, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
 
+    constructor(config?: GitHubConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
+        this._config = config;
+        this._tokenGetter = tokenGetter;
+        this._tokenSetter = tokenSetter;
+    }
+
     private get owner(): string | undefined {
+        if (this._config) { return this._config.owner; }
         return vscode.workspace.getConfiguration('keepr.github').get<string>('owner');
     }
 
     private get repo(): string | undefined {
+        if (this._config) { return this._config.repo; }
         return vscode.workspace.getConfiguration('keepr.github').get<string>('repo');
     }
 
     private async getToken(): Promise<string | undefined> {
+        if (this._tokenGetter) { return this._tokenGetter(); }
         const stored = await this._secrets?.get('keepr.github.token');
         if (stored) { return stored; }
         return vscode.workspace.getConfiguration('keepr.github').get<string>('token');
@@ -32,6 +49,7 @@ export class GitHubProvider implements TicketProvider {
     }
 
     async storeToken(token: string): Promise<void> {
+        if (this._tokenSetter) { await this._tokenSetter(token); return; }
         await this._secrets?.store('keepr.github.token', token);
     }
 
