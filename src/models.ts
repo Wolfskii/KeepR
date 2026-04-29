@@ -42,9 +42,17 @@ export interface Bookmark {
 export interface RepoBookmarks {
     /** Display name of the repo / workspace folder */
     repoName: string;
+    /** User-overridden display name (persisted) */
+    displayName?: string;
     /** Absolute fsPath of the workspace folder root */
     rootUri: string;
     bookmarks: Bookmark[];
+}
+
+/** Strip common project-file extensions from folder names */
+const STRIP_EXTENSIONS = /\.(sln|csproj|fsproj|vbproj|proj|code-workspace)$/i;
+export function cleanRepoName(rawName: string): string {
+    return rawName.replace(STRIP_EXTENSIONS, '');
 }
 
 /** The full persisted state */
@@ -60,6 +68,20 @@ export function createEmptyState(): KeepRState {
 let _counter = 0;
 export function generateId(): string {
     return `${Date.now().toString(36)}-${(++_counter).toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Status → color mapping for editor decorations */
+export function statusColor(status?: BookmarkStatus): string {
+    switch (status) {
+        case 'Bug': return '#e55';
+        case 'To Fix': return '#e89540';
+        case 'Performance': return '#e8d44d';
+        case 'Bad Practice': return '#e89540';
+        case 'To Implement': return '#5b9fe8';
+        case 'Review': return '#b070e8';
+        case 'Note': return '#5be870';
+        default: return '#e2b714';
+    }
 }
 
 /** Status → ThemeIcon mapping */

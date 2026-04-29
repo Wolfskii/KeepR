@@ -13,7 +13,7 @@ class RepoNode {
   constructor(
     public readonly repo: RepoBookmarks,
     public collapsed: boolean,
-  ) {}
+  ) { }
 }
 
 class FileNode {
@@ -22,7 +22,7 @@ class FileNode {
     public readonly repo: RepoBookmarks,
     public readonly filePath: string,
     public readonly bookmarks: Bookmark[],
-  ) {}
+  ) { }
 }
 
 class GroupNode {
@@ -32,7 +32,7 @@ class GroupNode {
     public readonly repo: RepoBookmarks,
     public readonly bookmarks: Bookmark[],
     public readonly icon?: vscode.ThemeIcon,
-  ) {}
+  ) { }
 }
 
 class BookmarkNode {
@@ -40,7 +40,7 @@ class BookmarkNode {
   constructor(
     public readonly repo: RepoBookmarks,
     public readonly bookmark: Bookmark,
-  ) {}
+  ) { }
 }
 
 export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -218,8 +218,9 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   private repoTreeItem(node: RepoNode): vscode.TreeItem {
     const count = this.applyFilters(node.repo.bookmarks).length;
+    const displayName = this.store.getDisplayName(node.repo);
     const item = new vscode.TreeItem(
-      `${node.repo.repoName} (${count})`,
+      `${displayName} (${count})`,
       node.collapsed
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.Expanded,

@@ -5,6 +5,7 @@ import {
     BookmarkStatus,
     KeepRState,
     RepoBookmarks,
+    cleanRepoName,
     createEmptyState,
     generateId,
 } from './models';
@@ -29,12 +30,16 @@ export class BookmarkStore {
                 const raw = await vscode.workspace.fs.readFile(fileUri);
                 const json = JSON.parse(Buffer.from(raw).toString('utf-8')) as RepoBookmarks;
                 json.rootUri = folder.uri.toString();
-                json.repoName = json.repoName || folder.name;
+                json.repoName = json.repoName || cleanRepoName(folder.name);
+                // Keep persisted displayName if set, otherwise derive from folder name
+                if (!json.displayName) {
+                    json.displayName = undefined;
+                }
                 this.state.repos.push(json);
             } catch {
                 // File doesn't exist yet — create empty repo entry
                 this.state.repos.push({
-                    repoName: folder.name,
+                    repoName: cleanRepoName(folder.name),
                     rootUri: folder.uri.toString(),
                     bookmarks: [],
                 });
@@ -154,6 +159,19 @@ export class BookmarkStore {
             }
         }
         return false;
+    }
+
+    async renameRepo(repoName: string, displayName: string | undefined): Promise<boolean> {
+        const repo = this.state.repos.find((r) => r.repoName === repoName);
+        if (!repo) { return false; }
+        repo.displayName = displayName || undefined;
+        await this.saveRepo(repo);
+        this._onDidChange.fire();
+        return true;
+    }
+
+    getDisplayName(repo: RepoBookmarks): string {
+        return repo.displayName || repo.repoName;
     }
 
     async updateBookmark(

@@ -12,6 +12,7 @@ export function registerCommands(
     store: BookmarkStore,
     treeProvider: BookmarkTreeProvider,
     decorations: DecorationManager,
+    treeView: vscode.TreeView<any>,
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
 
@@ -20,6 +21,41 @@ export function registerCommands(
         return config.get<string[]>('statusLabels', [
             'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note',
         ]);
+    }
+
+    /** Emoji prefix per status for QuickPick items */
+    function statusEmoji(status: string): string {
+        switch (status) {
+            case 'Bug': return '$(bug)';
+            case 'To Fix': return '$(wrench)';
+            case 'Performance': return '$(dashboard)';
+            case 'Bad Practice': return '$(warning)';
+            case 'To Implement': return '$(lightbulb)';
+            case 'Review': return '$(eye)';
+            case 'Note': return '$(note)';
+            default: return '$(bookmark)';
+        }
+    }
+
+    function statusQuickPickItems(includeNone: boolean): vscode.QuickPickItem[] {
+        const statuses = getStatusLabels();
+        const items: vscode.QuickPickItem[] = statuses.map((s) => ({
+            label: `${statusEmoji(s)} ${s}`,
+            description: '',
+            detail: undefined,
+            _status: s,
+        } as vscode.QuickPickItem & { _status: string }));
+        if (includeNone) {
+            items.unshift({ label: '$(circle-slash) (none)', description: '' });
+        }
+        return items;
+    }
+
+    function extractStatus(pick: vscode.QuickPickItem | undefined): BookmarkStatus | undefined | null {
+        if (!pick) { return null; } // cancelled
+        if (pick.label.includes('(none)')) { return undefined; }
+        // Strip the icon prefix: "$(icon) Status" → "Status"
+        return pick.label.replace(/^\$\([^)]+\)\s*/, '') as BookmarkStatus;
     }
 
     // ── Toggle Bookmark (quick, no dialog) ───────────────
@@ -68,13 +104,12 @@ export function registerCommands(
             if (ticket === undefined) { return; }
 
             // Status
-            const statuses = getStatusLabels();
             const statusPick = await vscode.window.showQuickPick(
-                ['(none)', ...statuses],
+                statusQuickPickItems(true),
                 { placeHolder: 'Select status' },
             );
-            if (statusPick === undefined) { return; }
-            const status = statusPick === '(none)' ? undefined : statusPick as BookmarkStatus;
+            const status = extractStatus(statusPick);
+            if (status === null) { return; } // cancelled
 
             await store.addBookmark(editor.document.uri, line, {
                 label: label || undefined,
@@ -157,17 +192,34 @@ export function registerCommands(
                     break;
                 }
                 case 'Status': {
-                    const statuses = getStatusLabels();
                     const pick = await vscode.window.showQuickPick(
-                        ['(none)', ...statuses],
+                        statusQuickPickItems(true),
                         { placeHolder: 'Select status' },
                     );
-                    if (pick === undefined) { return; }
-                    const status = pick === '(none)' ? undefined : pick as BookmarkStatus;
-                    await store.updateBookmark(bookmarkId, { status });
+                    const newStatus = extractStatus(pick);
+                    if (newStatus === null) { return; }
+                    await store.updateBookmark(bookmarkId, { status: newStatus });
                     break;
                 }
             }
+        }),
+    );
+
+    // ── Rename Repo ──────────────────────────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.renameRepo', async (node?: { repo?: { repoName: string; displayName?: string } }) => {
+            if (!node?.repo) { return; }
+            const current = store.getDisplayName(
+                store.getState().repos.find((r) => r.repoName === node.repo!.repoName)!,
+            );
+            const newName = await vscode.window.showInputBox({
+                prompt: 'Rename project',
+                value: current,
+                placeHolder: 'e.g. "Nemo.Core"',
+            });
+            if (newName === undefined) { return; }
+            await store.renameRepo(node.repo.repoName, newName || undefined);
         }),
     );
 
@@ -252,12 +304,13 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.filterByStatus', async () => {
-            const statuses = getStatusLabels();
-            const pick = await vscode.window.showQuickPick(statuses, {
-                placeHolder: 'Filter bookmarks by status',
-            });
-            if (pick) {
-                treeProvider.setStatusFilter(pick as BookmarkStatus);
+            const pick = await vscode.window.showQuickPick(
+                statusQuickPickItems(false),
+                { placeHolder: 'Filter bookmarks by status' },
+            );
+            const chosen = extractStatus(pick);
+            if (chosen) {
+                treeProvider.setStatusFilter(chosen);
             }
         }),
     );
@@ -314,6 +367,24 @@ export function registerCommands(
                 editor.selection = new vscode.Selection(pos, pos);
                 editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
             }
+        }),
+    );
+
+    // ── Reveal bookmark in panel (from hover link or badge) ──
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.revealBookmark', async (bookmarkId?: string) => {
+            if (!bookmarkId) {
+                // Fallback: try current line
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) { return; }
+                const found = store.findBookmarkAtLine(editor.document.uri, editor.selection.active.line);
+                if (found) { bookmarkId = found.bookmark.id; }
+            }
+            if (!bookmarkId) { return; }
+
+            // Focus the KeepR panel
+            await vscode.commands.executeCommand('keepr.bookmarksView.focus');
         }),
     );
 

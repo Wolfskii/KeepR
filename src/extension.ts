@@ -24,7 +24,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     decorations = new DecorationManager(store);
 
     // Register all commands
-    const commandDisposables = registerCommands(context, store, treeProvider, decorations);
+    const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView);
 
     // Refresh tree when store changes
     store.onDidChange(() => treeProvider.refresh());
