@@ -3,6 +3,7 @@ import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
 import { registerCommands } from './commands';
+import { AzureDevOpsService } from './azureDevOps';
 
 let store: BookmarkStore;
 let treeProvider: BookmarkTreeProvider;
@@ -23,8 +24,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Editor decorations
     decorations = new DecorationManager(store);
 
+    // Azure DevOps integration
+    AzureDevOpsService.initSecretStorage(context.secrets);
+    const azdo = new AzureDevOpsService();
+
     // Register all commands
-    const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView);
+    const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView, azdo);
 
     // Refresh tree when store changes
     store.onDidChange(() => treeProvider.refresh());

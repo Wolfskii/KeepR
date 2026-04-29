@@ -3,6 +3,8 @@ import { BookmarkStatus } from './models';
 import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
+import { AzureDevOpsService } from './azureDevOps';
+import { pickTicket } from './ticketPicker';
 
 /**
  * Registers all KeepR commands and returns disposables.
@@ -13,6 +15,7 @@ export function registerCommands(
     treeProvider: BookmarkTreeProvider,
     decorations: DecorationManager,
     treeView: vscode.TreeView<any>,
+    azdo: AzureDevOpsService,
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
 
@@ -97,10 +100,7 @@ export function registerCommands(
             if (label === undefined) { return; } // cancelled
 
             // Ticket / PBI
-            const ticket = await vscode.window.showInputBox({
-                prompt: 'Ticket / PBI number (optional)',
-                placeHolder: 'e.g. "419046" or "FEAT-123"',
-            });
+            const ticket = await pickTicket(azdo);
             if (ticket === undefined) { return; }
 
             // Status
@@ -183,10 +183,7 @@ export function registerCommands(
                     break;
                 }
                 case 'Ticket': {
-                    const ticket = await vscode.window.showInputBox({
-                        prompt: 'Ticket / PBI number',
-                        value: bookmark.ticket ?? '',
-                    });
+                    const ticket = await pickTicket(azdo, bookmark.ticket);
                     if (ticket === undefined) { return; }
                     await store.updateBookmark(bookmarkId, { ticket: ticket || undefined });
                     break;
@@ -385,6 +382,26 @@ export function registerCommands(
 
             // Focus the KeepR panel
             await vscode.commands.executeCommand('keepr.bookmarksView.focus');
+        }),
+    );
+
+    // ── Set Azure DevOps PAT (secure storage) ────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setAzureDevOpsPat', async () => {
+            const pat = await vscode.window.showInputBox({
+                prompt: 'Enter your Azure DevOps Personal Access Token',
+                placeHolder: 'Paste PAT here…',
+                password: true,
+            });
+            if (pat === undefined) { return; }
+            if (pat) {
+                await azdo.storePat(pat);
+                vscode.window.showInformationMessage('KeepR: Azure DevOps PAT saved securely.');
+            } else {
+                await azdo.storePat('');
+                vscode.window.showInformationMessage('KeepR: Azure DevOps PAT cleared.');
+            }
         }),
     );
 

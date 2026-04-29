@@ -95,6 +95,10 @@
                 "command": "keepr.revealBookmark",
                 "title": "KeepR: Reveal Bookmark in Panel",
                 "icon": "$(bookmark)"
+            },
+            {
+                "command": "keepr.setAzureDevOpsPat",
+                "title": "KeepR: Set Azure DevOps PAT"
             }
         ],
         "viewsContainers": {
@@ -272,6 +276,21 @@
                         "Note"
                     ],
                     "description": "Available status labels for bookmarks"
+                },
+                "keepr.azureDevOps.orgUrl": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Azure DevOps organization URL (e.g. https://dev.azure.com/myorg)"
+                },
+                "keepr.azureDevOps.project": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Azure DevOps project name"
+                },
+                "keepr.azureDevOps.pat": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Personal Access Token (prefer using the 'KeepR: Set Azure DevOps PAT' command for secure storage)"
                 }
             }
         }
