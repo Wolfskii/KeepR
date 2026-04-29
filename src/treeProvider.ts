@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { Bookmark, BookmarkStatus, RepoBookmarks, statusIcon } from './models';
 import { BookmarkStore } from './store';
+import { AzureDevOpsService, WorkItemDetails } from './azureDevOps';
 
 type GroupBy = 'repo' | 'file' | 'status' | 'ticket';
 
@@ -52,8 +53,14 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private ticketFilter: string | undefined;
   /** Per-repo collapse state (repoName → collapsed) */
   private collapsedRepos = new Map<string, boolean>();
+  /** Cached work item details for enriching tree items */
+  private workItemCache = new Map<string, WorkItemDetails | null>();
+  private pendingFetches = new Set<string>();
 
-  constructor(private readonly store: BookmarkStore) {
+  constructor(
+    private readonly store: BookmarkStore,
+    private readonly azdo?: AzureDevOpsService,
+  ) {
     const config = vscode.workspace.getConfiguration('keepr');
     this.groupBy = config.get<GroupBy>('defaultGroupBy', 'repo');
   }
@@ -260,15 +267,25 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     const label = bm.label || bm.location.lineText?.trim() || `Line ${lineNum}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
 
-    // Description: line number + ticket + status
+    // Description: line number + ticket + work item state + status
     const parts: string[] = [`L${lineNum}`];
-    if (bm.ticket) { parts.push(`#${bm.ticket}`); }
+    if (bm.ticket) {
+      const wi = this.getCachedWorkItem(bm.ticket);
+      if (wi) {
+        parts.push(`#${bm.ticket} [${wi.state}]`);
+      } else {
+        parts.push(`#${bm.ticket}`);
+      }
+    }
     if (bm.status) { parts.push(bm.status); }
     item.description = parts.join(' · ');
 
     item.iconPath = statusIcon(bm.status);
-    item.contextValue = 'bookmark';
+    item.contextValue = bm.ticket ? 'bookmarkWithTicket' : 'bookmark';
     item.tooltip = this.buildTooltip(bm);
+
+    // Trigger async fetch for work item details (updates on next refresh)
+    if (bm.ticket) { this.fetchWorkItemAsync(bm.ticket); }
 
     // Click → navigate to bookmark
     const fileUri = this.store.resolveUri(node.repo, bm);
@@ -295,13 +312,90 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
     if (bm.label) { md.appendMarkdown(`**${bm.label}**\n\n`); }
-    if (bm.ticket) { md.appendMarkdown(`🎫 Ticket: \`${bm.ticket}\`\n\n`); }
+    if (bm.ticket) {
+      const ticketUrl = this.getTicketUrl(bm.ticket);
+      const wi = this.getCachedWorkItem(bm.ticket);
+      if (ticketUrl) {
+        md.appendMarkdown(`🎫 Ticket: [#${bm.ticket}](${ticketUrl})`);
+      } else {
+        md.appendMarkdown(`🎫 Ticket: \`${bm.ticket}\``);
+      }
+      if (wi) {
+        md.appendMarkdown(` — **${wi.state}**`);
+        if (wi.boardColumn && wi.boardColumn !== wi.state) {
+          md.appendMarkdown(` (${wi.boardColumn})`);
+        }
+        if (wi.type) { md.appendMarkdown(` · ${wi.type}`); }
+        if (wi.assignedTo) { md.appendMarkdown(` · ${wi.assignedTo}`); }
+      }
+      md.appendMarkdown('\n\n');
+
+      // Show linked branches
+      if (wi && wi.branches.length > 0) {
+        md.appendMarkdown(`🌿 **Branches:**\n\n`);
+        for (const branch of wi.branches) {
+          md.appendMarkdown(`- \`${branch}\`\n`);
+        }
+        md.appendMarkdown('\n');
+      }
+
+      // Show linked PRs
+      if (wi && wi.pullRequests.length > 0) {
+        md.appendMarkdown(`🔀 **Pull Requests:**\n\n`);
+        for (const pr of wi.pullRequests) {
+          const statusBadge = pr.status === 'completed' ? '✅' : pr.status === 'active' ? '🟢' : '⚪';
+          md.appendMarkdown(`- ${statusBadge} [${pr.title}](${pr.url}) (${pr.status})\n`);
+        }
+        md.appendMarkdown('\n');
+      }
+    }
     if (bm.status) { md.appendMarkdown(`📌 Status: ${bm.status}\n\n`); }
     md.appendMarkdown(`📄 ${bm.location.filePath}:${bm.location.line + 1}\n\n`);
     if (bm.location.lineText) {
       md.appendCodeblock(bm.location.lineText.trim(), '');
     }
     return md;
+  }
+
+  private getTicketUrl(ticket: string): string | undefined {
+    const config = vscode.workspace.getConfiguration('keepr.azureDevOps');
+    const orgUrl = config.get<string>('orgUrl');
+    const project = config.get<string>('project');
+    if (!orgUrl || !project || !ticket) { return undefined; }
+    // If ticket is numeric, link directly to the work item
+    const id = ticket.replace(/^#/, '');
+    return `${orgUrl.replace(/\/+$/, '')}/${encodeURIComponent(project)}/_workitems/edit/${encodeURIComponent(id)}`;
+  }
+
+  // ── Async work item fetching ─────────────────────────
+
+  private getCachedWorkItem(ticket: string): WorkItemDetails | undefined {
+    const cached = this.workItemCache.get(ticket);
+    return cached ?? undefined;
+  }
+
+  private fetchWorkItemAsync(ticket: string): void {
+    if (!this.azdo?.isConfigured()) { return; }
+    if (this.workItemCache.has(ticket) || this.pendingFetches.has(ticket)) { return; }
+
+    this.pendingFetches.add(ticket);
+    this.azdo.getWorkItemDetails(ticket).then((details) => {
+      this.pendingFetches.delete(ticket);
+      this.workItemCache.set(ticket, details ?? null);
+      if (details) {
+        // Refresh tree to show the newly fetched data
+        this._onDidChangeTreeData.fire(undefined);
+      }
+    }).catch(() => {
+      this.pendingFetches.delete(ticket);
+    });
+  }
+
+  /** Force re-fetch all work item data */
+  refreshWorkItems(): void {
+    this.workItemCache.clear();
+    this.azdo?.clearCache();
+    this.refresh();
   }
 
   dispose(): void {

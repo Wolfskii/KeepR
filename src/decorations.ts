@@ -129,7 +129,14 @@ export class DecorationManager {
 
     const parts: string[] = ['**🔖 KeepR**'];
     if (bm.label) { parts.push(bm.label); }
-    if (bm.ticket) { parts.push(`🎫 ${bm.ticket}`); }
+    if (bm.ticket) {
+      const ticketUrl = this.getTicketUrl(bm.ticket);
+      if (ticketUrl) {
+        parts.push(`🎫 [#${bm.ticket}](${ticketUrl})`);
+      } else {
+        parts.push(`🎫 ${bm.ticket}`);
+      }
+    }
     if (bm.status) { parts.push(`📌 ${bm.status}`); }
     md.appendMarkdown(parts.join(' · '));
 
@@ -140,6 +147,15 @@ export class DecorationManager {
     md.appendMarkdown(`\n\n[Show in KeepR panel](${cmdUri})`);
 
     return md;
+  }
+
+  private getTicketUrl(ticket: string): string | undefined {
+    const config = vscode.workspace.getConfiguration('keepr.azureDevOps');
+    const orgUrl = config.get<string>('orgUrl');
+    const project = config.get<string>('project');
+    if (!orgUrl || !project || !ticket) { return undefined; }
+    const id = ticket.replace(/^#/, '');
+    return `${orgUrl.replace(/\/+$/, '')}/${encodeURIComponent(project)}/_workitems/edit/${encodeURIComponent(id)}`;
   }
 
   private disposeDecorations(): void {

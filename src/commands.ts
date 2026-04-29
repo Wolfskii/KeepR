@@ -405,5 +405,48 @@ export function registerCommands(
         }),
     );
 
+    // ── Open Ticket in Browser ────────────────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.openTicket', async (node?: { bookmark?: { id: string } }) => {
+            let ticket: string | undefined;
+
+            if (node?.bookmark) {
+                const found = store.findBookmarkById(node.bookmark.id);
+                ticket = found?.bookmark.ticket;
+            } else {
+                const editor = vscode.window.activeTextEditor;
+                if (editor) {
+                    const found = store.findBookmarkAtLine(editor.document.uri, editor.selection.active.line);
+                    ticket = found?.bookmark.ticket;
+                }
+            }
+
+            if (!ticket) {
+                vscode.window.showInformationMessage('No ticket linked to this bookmark.');
+                return;
+            }
+
+            const config = vscode.workspace.getConfiguration('keepr.azureDevOps');
+            const orgUrl = config.get<string>('orgUrl');
+            const project = config.get<string>('project');
+
+            if (!orgUrl || !project) {
+                vscode.window.showWarningMessage('Configure keepr.azureDevOps.orgUrl and project to open tickets.');
+                return;
+            }
+
+            const id = ticket.replace(/^#/, '');
+            const url = `${orgUrl.replace(/\/+$/, '')}/${encodeURIComponent(project)}/_workitems/edit/${encodeURIComponent(id)}`;
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+        }),
+
+        // ── Refresh work item data ─────────────────────
+        vscode.commands.registerCommand('keepr.refreshWorkItems', () => {
+            treeProvider.refreshWorkItems();
+            vscode.window.showInformationMessage('KeepR: Work item data refreshed.');
+        }),
+    );
+
     return disposables;
 }

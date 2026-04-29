@@ -99,6 +99,16 @@
             {
                 "command": "keepr.setAzureDevOpsPat",
                 "title": "KeepR: Set Azure DevOps PAT"
+            },
+            {
+                "command": "keepr.openTicket",
+                "title": "KeepR: Open Ticket in Browser",
+                "icon": "$(link-external)"
+            },
+            {
+                "command": "keepr.refreshWorkItems",
+                "title": "KeepR: Refresh Work Item Status",
+                "icon": "$(refresh)"
             }
         ],
         "viewsContainers": {
@@ -146,6 +156,11 @@
                     "command": "keepr.clearFilter",
                     "when": "view == keepr.bookmarksView",
                     "group": "navigation@5"
+                },
+                {
+                    "command": "keepr.refreshWorkItems",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@6"
                 }
             ],
             "view/item/context": [
@@ -168,6 +183,16 @@
                     "command": "keepr.removeBookmark",
                     "when": "view == keepr.bookmarksView && viewItem == bookmark",
                     "group": "1_actions@2"
+                },
+                {
+                    "command": "keepr.openTicket",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmarkWithTicket",
+                    "group": "inline@3"
+                },
+                {
+                    "command": "keepr.openTicket",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmarkWithTicket",
+                    "group": "1_actions@3"
                 },
                 {
                     "command": "keepr.renameRepo",

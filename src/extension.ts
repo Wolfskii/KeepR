@@ -14,8 +14,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store = new BookmarkStore(context);
     await store.load();
 
+    // Azure DevOps integration
+    AzureDevOpsService.initSecretStorage(context.secrets);
+    const azdo = new AzureDevOpsService();
+
     // Tree view
-    treeProvider = new BookmarkTreeProvider(store);
+    treeProvider = new BookmarkTreeProvider(store, azdo);
     const treeView = vscode.window.createTreeView('keepr.bookmarksView', {
         treeDataProvider: treeProvider,
         showCollapseAll: true,
@@ -23,10 +27,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Editor decorations
     decorations = new DecorationManager(store);
-
-    // Azure DevOps integration
-    AzureDevOpsService.initSecretStorage(context.secrets);
-    const azdo = new AzureDevOpsService();
 
     // Register all commands
     const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView, azdo);

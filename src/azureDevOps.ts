@@ -8,6 +8,17 @@ export interface WorkItem {
     assignedTo?: string;
 }
 
+export interface WorkItemDetails extends WorkItem {
+    /** Kanban board column if available */
+    boardColumn?: string;
+    /** Linked branch names */
+    branches: string[];
+    /** Linked PR titles with URLs */
+    pullRequests: { title: string; url: string; status: string }[];
+    /** When this was last fetched */
+    _fetchedAt: number;
+}
+
 /**
  * Lightweight Azure DevOps REST client for searching work items.
  * Uses the WIQL query endpoint — no SDK dependency needed.
@@ -116,5 +127,144 @@ export class AzureDevOpsService {
 
     private escapeWiql(text: string): string {
         return text.replace(/'/g, "''");
+    }
+
+    // ── Work item details with cache ──────────────────────
+
+    /** Cache: work item ID → details (TTL 2 minutes) */
+    private detailsCache = new Map<number, WorkItemDetails>();
+    private static CACHE_TTL = 2 * 60 * 1000;
+
+    /**
+     * Get full details for a work item including state, board column, branches, and PRs.
+     * Returns cached result if fresh enough.
+     */
+    async getWorkItemDetails(ticketId: string): Promise<WorkItemDetails | undefined> {
+        const id = parseInt(ticketId.replace(/^#/, ''), 10);
+        if (isNaN(id)) { return undefined; }
+
+        const cached = this.detailsCache.get(id);
+        if (cached && (Date.now() - cached._fetchedAt) < AzureDevOpsService.CACHE_TTL) {
+            return cached;
+        }
+
+        const orgUrl = this.orgUrl;
+        const project = this.project;
+        const pat = await this.getPat();
+        if (!orgUrl || !project || !pat) { return undefined; }
+
+        try {
+            const headers = {
+                'Authorization': `Basic ${Buffer.from(':' + pat).toString('base64')}`,
+            };
+            const base = this.normalizeUrl(orgUrl);
+
+            // Fetch work item with relations
+            const wiUrl = `${base}/_apis/wit/workitems/${id}?$expand=relations&api-version=7.0`;
+            const wiResp = await fetch(wiUrl, { headers });
+            if (!wiResp.ok) { return undefined; }
+            const wiData = await wiResp.json() as {
+                id: number;
+                fields: Record<string, any>;
+                relations?: { rel: string; url: string; attributes: Record<string, any> }[];
+            };
+
+            const fields = wiData.fields;
+            const details: WorkItemDetails = {
+                id: wiData.id,
+                title: fields['System.Title'] ?? '',
+                type: fields['System.WorkItemType'] ?? '',
+                state: fields['System.State'] ?? '',
+                assignedTo: fields['System.AssignedTo']?.displayName,
+                boardColumn: fields['System.BoardColumn'],
+                branches: [],
+                pullRequests: [],
+                _fetchedAt: Date.now(),
+            };
+
+            // Extract branch and PR links from relations
+            const relations = wiData.relations ?? [];
+            for (const rel of relations) {
+                if (rel.rel === 'ArtifactLink') {
+                    const artifactUrl = rel.url ?? '';
+                    const name = rel.attributes?.['name'] ?? '';
+
+                    if (artifactUrl.includes('/GIT/Ref/') || name === 'Branch') {
+                        // Branch link — extract branch name from the URL
+                        const branchName = this.extractBranchName(artifactUrl);
+                        if (branchName) { details.branches.push(branchName); }
+                    } else if (artifactUrl.includes('/GIT/PullRequestId/') || name === 'Pull Request') {
+                        // PR link — fetch PR details
+                        const pr = await this.fetchPrFromArtifact(artifactUrl, headers, base);
+                        if (pr) { details.pullRequests.push(pr); }
+                    }
+                }
+            }
+
+            this.detailsCache.set(id, details);
+            return details;
+        } catch (err) {
+            console.error('KeepR: Failed to fetch work item details', err);
+            return undefined;
+        }
+    }
+
+    /** Invalidate cache for a specific ticket */
+    invalidateCache(ticketId: string): void {
+        const id = parseInt(ticketId.replace(/^#/, ''), 10);
+        if (!isNaN(id)) { this.detailsCache.delete(id); }
+    }
+
+    clearCache(): void {
+        this.detailsCache.clear();
+    }
+
+    private extractBranchName(artifactUrl: string): string | undefined {
+        // vstfs:///Git/Ref/<projectId>/<repoId>/GB<branchPath>
+        try {
+            const parts = artifactUrl.split('/');
+            const gbPart = parts.find(p => p.startsWith('GB'));
+            if (gbPart) {
+                return decodeURIComponent(gbPart.slice(2)); // strip 'GB' prefix
+            }
+        } catch { /* ignore parse errors */ }
+        return undefined;
+    }
+
+    private async fetchPrFromArtifact(
+        artifactUrl: string,
+        headers: Record<string, string>,
+        baseUrl: string,
+    ): Promise<{ title: string; url: string; status: string } | undefined> {
+        try {
+            // vstfs:///Git/PullRequestId/<projectId>/<prId>
+            const parts = artifactUrl.split('/');
+            const prId = parts[parts.length - 1];
+            if (!prId || isNaN(parseInt(prId, 10))) { return undefined; }
+
+            const project = this.project!;
+            const prUrl = `${baseUrl}/${encodeURIComponent(project)}/_apis/git/pullrequests/${prId}?api-version=7.0`;
+            const resp = await fetch(prUrl, { headers });
+            if (!resp.ok) { return undefined; }
+
+            const pr = await resp.json() as {
+                title?: string;
+                status?: string;
+                repository?: { name?: string };
+                pullRequestId?: number;
+            };
+
+            const orgUrl = this.orgUrl!;
+            const repoName = pr.repository?.name ?? '';
+            const webUrl = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${pr.pullRequestId}`;
+
+            return {
+                title: pr.title ?? `PR #${prId}`,
+                url: webUrl,
+                status: pr.status ?? 'unknown',
+            };
+        } catch {
+            return undefined;
+        }
     }
 }
