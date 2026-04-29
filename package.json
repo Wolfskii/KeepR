@@ -1,0 +1,266 @@
+{
+    "name": "keepr",
+    "displayName": "KeepR",
+    "description": "Code bookmarks with ticket tracking, statuses, and collapsible repo sections",
+    "version": "0.1.0",
+    "publisher": "dawidjk",
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "icon": "resources/icon.png",
+    "contributes": {
+        "commands": [
+            {
+                "command": "keepr.toggleBookmark",
+                "title": "KeepR: Toggle Bookmark",
+                "icon": "$(bookmark)"
+            },
+            {
+                "command": "keepr.addBookmark",
+                "title": "KeepR: Add Bookmark with Details",
+                "icon": "$(add)"
+            },
+            {
+                "command": "keepr.removeBookmark",
+                "title": "KeepR: Remove Bookmark",
+                "icon": "$(trash)"
+            },
+            {
+                "command": "keepr.editBookmark",
+                "title": "KeepR: Edit Bookmark",
+                "icon": "$(edit)"
+            },
+            {
+                "command": "keepr.goToBookmark",
+                "title": "KeepR: Go to Bookmark"
+            },
+            {
+                "command": "keepr.nextBookmark",
+                "title": "KeepR: Next Bookmark"
+            },
+            {
+                "command": "keepr.previousBookmark",
+                "title": "KeepR: Previous Bookmark"
+            },
+            {
+                "command": "keepr.clearAllBookmarks",
+                "title": "KeepR: Clear All Bookmarks"
+            },
+            {
+                "command": "keepr.toggleSectionCollapse",
+                "title": "KeepR: Toggle Section Collapse"
+            },
+            {
+                "command": "keepr.collapseAll",
+                "title": "KeepR: Collapse All Sections",
+                "icon": "$(collapse-all)"
+            },
+            {
+                "command": "keepr.expandAll",
+                "title": "KeepR: Expand All Sections",
+                "icon": "$(expand-all)"
+            },
+            {
+                "command": "keepr.filterByStatus",
+                "title": "KeepR: Filter by Status",
+                "icon": "$(filter)"
+            },
+            {
+                "command": "keepr.filterByTicket",
+                "title": "KeepR: Filter by Ticket",
+                "icon": "$(search)"
+            },
+            {
+                "command": "keepr.clearFilter",
+                "title": "KeepR: Clear Filter",
+                "icon": "$(clear-all)"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "keepr",
+                    "title": "KeepR Bookmarks",
+                    "icon": "$(bookmark)"
+                }
+            ]
+        },
+        "views": {
+            "keepr": [
+                {
+                    "id": "keepr.bookmarksView",
+                    "name": "Bookmarks",
+                    "icon": "$(bookmark)",
+                    "contextualTitle": "KeepR Bookmarks"
+                }
+            ]
+        },
+        "menus": {
+            "view/title": [
+                {
+                    "command": "keepr.addBookmark",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "keepr.collapseAll",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "keepr.expandAll",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@3"
+                },
+                {
+                    "command": "keepr.filterByStatus",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@4"
+                },
+                {
+                    "command": "keepr.clearFilter",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@5"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "keepr.editBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "group": "inline@1"
+                },
+                {
+                    "command": "keepr.removeBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "group": "inline@2"
+                },
+                {
+                    "command": "keepr.editBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "group": "1_actions@1"
+                },
+                {
+                    "command": "keepr.removeBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmark",
+                    "group": "1_actions@2"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "keepr.toggleBookmark",
+                    "group": "keepr@1"
+                },
+                {
+                    "command": "keepr.addBookmark",
+                    "group": "keepr@2"
+                }
+            ],
+            "editor/title": [
+                {
+                    "command": "keepr.toggleBookmark",
+                    "group": "navigation",
+                    "when": "editorTextFocus"
+                }
+            ]
+        },
+        "keybindings": [
+            {
+                "command": "keepr.toggleBookmark",
+                "key": "ctrl+alt+k",
+                "when": "editorTextFocus"
+            },
+            {
+                "command": "keepr.addBookmark",
+                "key": "ctrl+alt+shift+k",
+                "when": "editorTextFocus"
+            },
+            {
+                "command": "keepr.nextBookmark",
+                "key": "ctrl+alt+l",
+                "when": "editorTextFocus"
+            },
+            {
+                "command": "keepr.previousBookmark",
+                "key": "ctrl+alt+j",
+                "when": "editorTextFocus"
+            }
+        ],
+        "colors": [
+            {
+                "id": "keepr.bookmarkBackground",
+                "description": "Background color for bookmarked lines",
+                "defaults": {
+                    "dark": "#2d2d0044",
+                    "light": "#ffff0022",
+                    "highContrast": "#ffff0044"
+                }
+            },
+            {
+                "id": "keepr.bookmarkBorder",
+                "description": "Border color for bookmarked lines",
+                "defaults": {
+                    "dark": "#e2b714",
+                    "light": "#b8960e",
+                    "highContrast": "#ffcc00"
+                }
+            }
+        ],
+        "configuration": {
+            "title": "KeepR",
+            "properties": {
+                "keepr.gutterIconEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show bookmark icons in the editor gutter"
+                },
+                "keepr.lineHighlightEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Highlight bookmarked lines with a background color"
+                },
+                "keepr.defaultGroupBy": {
+                    "type": "string",
+                    "default": "repo",
+                    "enum": [
+                        "repo",
+                        "file",
+                        "status",
+                        "ticket"
+                    ],
+                    "description": "Default grouping for the bookmarks tree view"
+                },
+                "keepr.statusLabels": {
+                    "type": "array",
+                    "default": [
+                        "To Fix",
+                        "Bug",
+                        "Performance",
+                        "Bad Practice",
+                        "To Implement",
+                        "Review",
+                        "Note"
+                    ],
+                    "description": "Available status labels for bookmarks"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "lint": "eslint src --ext ts"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/vscode": "^1.85.0",
+        "typescript": "^5.3.0"
+    }
+}
