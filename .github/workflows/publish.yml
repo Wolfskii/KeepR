@@ -23,15 +23,40 @@ jobs:
 
       - run: npm run compile
 
-      - name: Bump patch version
-        run: npm version patch --no-git-tag-version
+      - name: Determine next version
+        id: version
+        run: |
+          # Get the latest published version from the marketplace
+          PUBLISHED=$(npx @vscode/vsce show wolfskii.keepr --json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).versions[0].version" 2>/dev/null || echo "")
+          LOCAL=$(node -p "require('./package.json').version")
+
+          # Use whichever is higher as the base
+          BASE=$(node -e "
+            const semver = (v) => v.split('.').map(Number);
+            const pub = '${PUBLISHED}' ? semver('${PUBLISHED}') : [0,0,0];
+            const loc = semver('${LOCAL}');
+            const higher = (pub[0] > loc[0] || (pub[0] === loc[0] && pub[1] > loc[1]) || (pub[0] === loc[0] && pub[1] === loc[1] && pub[2] > loc[2])) ? '${PUBLISHED}' : '${LOCAL}';
+            console.log(higher);
+          ")
+
+          # Bump patch from the higher base
+          NEXT=$(node -e "
+            const [M, m, p] = '${BASE}'.split('.').map(Number);
+            console.log(M + '.' + m + '.' + (p + 1));
+          ")
+
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Published: ${PUBLISHED:-none}, Local: $LOCAL, Base: $BASE, Next: $NEXT"
+
+      - name: Set version in package.json
+        run: npm version ${{ steps.version.outputs.next }} --no-git-tag-version --allow-same-version
 
       - name: Commit and push version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json
-          git commit -m "chore: bump version to $(node -p "require('./package.json').version")"
+          git commit -m "chore: bump version to ${{ steps.version.outputs.next }}" || echo "No changes to commit"
           git push
 
       - name: Publish to VS Code Marketplace
