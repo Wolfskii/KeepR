@@ -2,7 +2,7 @@
     "name": "keepr",
     "displayName": "KeepR",
     "description": "Code bookmarks with ticket tracking, statuses, and collapsible repo sections",
-    "version": "0.1.9",
+    "version": "0.1.10",
     "publisher": "wolfskii",
     "repository": {
         "type": "git",
