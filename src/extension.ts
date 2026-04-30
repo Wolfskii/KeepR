@@ -3,6 +3,7 @@ import { BookmarkStore } from './store';
 import { BookmarkTreeProvider } from './treeProvider';
 import { DecorationManager } from './decorations';
 import { registerCommands } from './commands';
+import { registerTools } from './tools';
 import { ProviderManager, ConnectionStore, ProviderTreeProvider } from './providers';
 import { showOnboardingIfNeeded } from './onboarding';
 
@@ -48,6 +49,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register all commands
     const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView, providers);
+
+    // Register Language Model Tools (Copilot Chat / MCP integration)
+    registerTools(context, store, decorations, providers);
 
     // Refresh tree when store changes
     store.onDidChange(() => treeProvider.refresh());

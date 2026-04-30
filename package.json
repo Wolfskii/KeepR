@@ -9,7 +9,7 @@
         "url": "https://github.com/Wolfskii/KeepR"
     },
     "engines": {
-        "vscode": "^1.85.0"
+        "vscode": "^1.99.0"
     },
     "categories": [
         "Other"
@@ -322,6 +322,163 @@
                 }
             }
         ],
+        "languageModelTools": [
+            {
+                "name": "keepr_listBookmarks",
+                "displayName": "List Bookmarks",
+                "modelDescription": "List all KeepR code bookmarks in the workspace. Can optionally filter by status, ticket number, or file path. Returns bookmark details including file path, line number, label, status, and linked ticket.",
+                "icon": "$(bookmark)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "description": "Filter by status (e.g. 'Bug', 'To Fix', 'Performance', 'To Implement', 'Review', 'Note')"
+                        },
+                        "ticket": {
+                            "type": "string",
+                            "description": "Filter by ticket/PBI number"
+                        },
+                        "filePath": {
+                            "type": "string",
+                            "description": "Filter by file path (substring match)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "keepr_addBookmark",
+                "displayName": "Add Bookmark",
+                "modelDescription": "Add a KeepR code bookmark at a specific file and line. Optionally attach a label, ticket number, and status.",
+                "icon": "$(add)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {
+                            "type": "string",
+                            "description": "Workspace-relative or absolute file path to bookmark"
+                        },
+                        "line": {
+                            "type": "number",
+                            "description": "1-based line number to bookmark"
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Optional label/note for the bookmark"
+                        },
+                        "ticket": {
+                            "type": "string",
+                            "description": "Optional ticket/PBI number to link"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Optional status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note'"
+                        }
+                    },
+                    "required": [
+                        "filePath",
+                        "line"
+                    ]
+                }
+            },
+            {
+                "name": "keepr_removeBookmark",
+                "displayName": "Remove Bookmark",
+                "modelDescription": "Remove a KeepR bookmark by its ID, or by file path and line number.",
+                "icon": "$(trash)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "The bookmark ID to remove"
+                        },
+                        "filePath": {
+                            "type": "string",
+                            "description": "File path of the bookmark to remove (used with line)"
+                        },
+                        "line": {
+                            "type": "number",
+                            "description": "1-based line number of the bookmark to remove (used with filePath)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "keepr_getStats",
+                "displayName": "Bookmark Statistics",
+                "modelDescription": "Get statistics about KeepR bookmarks: total count, breakdown by status, breakdown by ticket, and breakdown by repo/project.",
+                "icon": "$(graph)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "keepr_editBookmark",
+                "displayName": "Edit Bookmark",
+                "modelDescription": "Edit an existing KeepR bookmark's label, ticket, or status. Identify the bookmark by its ID (from keepr_listBookmarks) or by file path + line number.",
+                "icon": "$(edit)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "The bookmark ID to edit"
+                        },
+                        "filePath": {
+                            "type": "string",
+                            "description": "File path of the bookmark to edit (used with line)"
+                        },
+                        "line": {
+                            "type": "number",
+                            "description": "1-based line number of the bookmark to edit (used with filePath)"
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "New label/note (empty string to clear)"
+                        },
+                        "ticket": {
+                            "type": "string",
+                            "description": "New ticket/PBI number (empty string to clear)"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "New status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note' (empty string to clear)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "keepr_getConnections",
+                "displayName": "Get Provider Connections",
+                "modelDescription": "List all configured ticket provider connections (Azure DevOps, GitHub, Jira) and which one is active. Shows connection names, types, and non-secret config (org URLs, project names, etc.) but never tokens or PATs. If no connections exist, tells the user how to set one up.",
+                "icon": "$(plug)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "keepr_getTicketDetails",
+                "displayName": "Get Ticket Details",
+                "modelDescription": "Fetch live details for a ticket/work item linked to a bookmark, using the active ticket provider. Returns the ticket's state, type, title, assigned person, board column (Azure DevOps), associated branches, and pull requests. Can look up by ticket ID directly, or fetch details for all bookmarks that have linked tickets.",
+                "icon": "$(link-external)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ticketId": {
+                            "type": "string",
+                            "description": "Specific ticket/PBI ID to look up"
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "If true, fetch details for all unique tickets linked to bookmarks"
+                        }
+                    }
+                }
+            }
+        ],
         "configuration": {
             "title": "KeepR",
             "properties": {
@@ -449,7 +606,7 @@
     },
     "devDependencies": {
         "@types/node": "^20.11.0",
-        "@types/vscode": "^1.85.0",
+        "@types/vscode": "^1.99.0",
         "typescript": "^5.3.0"
     }
 }
