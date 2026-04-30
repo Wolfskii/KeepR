@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Branch to merge into master"
+        description: "Branch to merge into develop"
         required: true
         type: string
       bump:
@@ -26,8 +26,8 @@ jobs:
     steps:
       - name: Validate inputs
         run: |
-          if [ "${{ inputs.branch }}" = "master" ] || [ "${{ inputs.branch }}" = "main" ]; then
-            echo "::error::Cannot release from master itself. Choose a feature/develop branch."
+          if [ "${{ inputs.branch }}" = "develop" ] || [ "${{ inputs.branch }}" = "master" ] || [ "${{ inputs.branch }}" = "main" ]; then
+            echo "::error::Cannot release from the main branch itself. Choose a feature branch."
             exit 1
           fi
           if [ "${{ inputs.bump }}" = "custom" ] && [ -z "${{ inputs.custom_version }}" ]; then
@@ -92,14 +92,14 @@ jobs:
           git add package.json package-lock.json
           git commit -m "release: v${{ steps.newver.outputs.version }}"
 
-      - name: Merge branch into master
+      - name: Merge branch into develop
         run: |
-          git fetch origin master
-          git checkout master
+          git fetch origin develop
+          git checkout develop
           git merge ${{ inputs.branch }} --no-ff -m "release: merge ${{ inputs.branch }} (v${{ steps.newver.outputs.version }})"
 
-      - name: Push master
-        run: git push origin master
+      - name: Push develop
+        run: git push origin develop
 
       - name: Create git tag
         run: |
