@@ -9,10 +9,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PUBLISHING_PAT }}
 
       - uses: actions/setup-node@v4
         with:
