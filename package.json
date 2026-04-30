@@ -600,9 +600,9 @@
         "watch": "tsc -watch -p ./",
         "lint": "eslint src --ext ts",
         "package": "vsce package",
-        "publish": "vsce publish patch",
-        "publish:minor": "vsce publish minor",
-        "publish:patch": "vsce publish patch"
+        "publish": "node scripts/publish.js patch",
+        "publish:minor": "node scripts/publish.js minor",
+        "publish:local": "npm version patch --no-git-tag-version && vsce package"
     },
     "devDependencies": {
         "@types/node": "^20.11.0",

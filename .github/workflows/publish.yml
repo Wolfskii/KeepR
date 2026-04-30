@@ -3,12 +3,16 @@ name: Publish Extension
 on:
   push:
     branches: [develop]
+    paths-ignore:
+      - 'package.json'
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PUBLISHING_PAT }}
 
       - uses: actions/setup-node@v4
         with:
@@ -18,7 +22,18 @@ jobs:
 
       - run: npm run compile
 
+      - name: Bump patch version
+        run: npm version patch --no-git-tag-version
+
       - name: Publish to VS Code Marketplace
-        run: npx @vscode/vsce publish patch --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
+        run: npx @vscode/vsce publish --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
         env:
           VSCE_PAT: ${{ secrets.PUBLISHING_PAT }}
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $(node -p \"require('./package.json').version\")"
+          git push
