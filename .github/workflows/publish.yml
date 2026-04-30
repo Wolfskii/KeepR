@@ -5,6 +5,7 @@ on:
     branches: [develop]
     paths-ignore:
       - 'package.json'
+      - 'package-lock.json'
 
 jobs:
   publish:
@@ -25,15 +26,15 @@ jobs:
       - name: Bump patch version
         run: npm version patch --no-git-tag-version
 
-      - name: Publish to VS Code Marketplace
-        run: npx @vscode/vsce publish --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
-        env:
-          VSCE_PAT: ${{ secrets.PUBLISHING_PAT }}
-
-      - name: Commit version bump
+      - name: Commit and push version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json
-          git commit -m "chore: bump version to $(node -p \"require('./package.json').version\")"
+          git commit -m "chore: bump version to $(node -p "require('./package.json').version")"
           git push
+
+      - name: Publish to VS Code Marketplace
+        run: npx @vscode/vsce publish --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
+        env:
+          VSCE_PAT: ${{ secrets.PUBLISHING_PAT }}
