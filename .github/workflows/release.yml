@@ -1,0 +1,116 @@
+name: Release (Major/Minor)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to merge into master"
+        required: true
+        type: string
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: "Custom version (only if bump=custom, e.g. 2.0.0). Must be higher than current."
+        required: false
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.branch }}" = "master" ] || [ "${{ inputs.branch }}" = "main" ]; then
+            echo "::error::Cannot release from master itself. Choose a feature/develop branch."
+            exit 1
+          fi
+          if [ "${{ inputs.bump }}" = "custom" ] && [ -z "${{ inputs.custom_version }}" ]; then
+            echo "::error::custom_version is required when bump=custom"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Current version: $VERSION"
+
+      - name: Compute new version
+        id: newver
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          if [ "${{ inputs.bump }}" = "major" ]; then
+            NEW_VERSION="$((MAJOR + 1)).0.0"
+          elif [ "${{ inputs.bump }}" = "minor" ]; then
+            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          else
+            NEW_VERSION="${{ inputs.custom_version }}"
+          fi
+
+          # Validate new version is higher
+          node -e "
+            const semver = (v) => v.split('.').map(Number);
+            const [cM, cm, cp] = semver('${CURRENT}');
+            const [nM, nm, np] = semver('${NEW_VERSION}');
+            if (nM < cM || (nM === cM && nm < cm) || (nM === cM && nm === cm && np <= cp)) {
+              console.error('New version ${NEW_VERSION} is not higher than current ${CURRENT}');
+              process.exit(1);
+            }
+          "
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION"
+
+      - name: Bump version in package.json
+        run: npm version ${{ steps.newver.outputs.version }} --no-git-tag-version
+
+      - name: Commit version bump
+        run: |
+          git add package.json package-lock.json
+          git commit -m "release: v${{ steps.newver.outputs.version }}"
+
+      - name: Merge branch into master
+        run: |
+          git fetch origin master
+          git checkout master
+          git merge ${{ inputs.branch }} --no-ff -m "release: merge ${{ inputs.branch }} (v${{ steps.newver.outputs.version }})"
+
+      - name: Push master
+        run: git push origin master
+
+      - name: Create git tag
+        run: |
+          git tag "v${{ steps.newver.outputs.version }}"
+          git push origin "v${{ steps.newver.outputs.version }}"
+
+      - run: npm ci
+
+      - run: npm run compile
+
+      - name: Publish to VS Code Marketplace
+        run: npx @vscode/vsce publish --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
+        env:
+          VSCE_PAT: ${{ secrets.PUBLISHING_PAT }}
