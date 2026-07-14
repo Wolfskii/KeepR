@@ -800,7 +800,13 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   async getAvailableMyPrStates(): Promise<string[]> {
     await this.ensureMyItemsLoaded();
-    return [...new Set((this.myPrsCache ?? []).map((item) => item.item.status || item.item.state).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
+    const knownStates = ['active', 'completed', 'abandoned', 'closed', 'merged', 'declined', 'draft'];
+    const discoveredStates = (this.myPrsCache ?? [])
+      .map((item) => item.item.status || item.item.state)
+      .filter(Boolean) as string[];
+
+    const allStates = [...new Set([...knownStates, ...discoveredStates])];
+    return allStates.sort((a, b) => a.localeCompare(b));
   }
 
   private isMyItemsEnabled(): boolean {
