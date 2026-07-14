@@ -63,3 +63,16 @@ jobs:
         run: npx @vscode/vsce publish --no-git-tag-version -p ${{ secrets.PUBLISHING_PAT }}
         env:
           VSCE_PAT: ${{ secrets.PUBLISHING_PAT }}
+
+      - name: Create and push git tag
+        run: |
+          TAG="v${{ steps.version.outputs.next }}"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.next }}
+          name: v${{ steps.version.outputs.next }}
+          generate_release_notes: true
