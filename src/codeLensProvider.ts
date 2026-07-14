@@ -33,6 +33,18 @@ export class BookmarkCodeLensProvider implements vscode.CodeLensProvider {
 
             lenses.push(
                 new vscode.CodeLens(range, {
+                    title: '$(list-tree) View',
+                    tooltip: 'Reveal bookmark in KeepR panel',
+                    command: 'keepr.revealBookmark',
+                    arguments: [bm.id],
+                }),
+                new vscode.CodeLens(range, {
+                    title: '$(edit) Edit',
+                    tooltip: 'Edit bookmark label/ticket/status',
+                    command: 'keepr.editBookmarkById',
+                    arguments: [bm.id],
+                }),
+                new vscode.CodeLens(range, {
                     title: '$(check) Resolve',
                     tooltip: 'Mark bookmark as resolved',
                     command: 'keepr.resolveBookmarkById',

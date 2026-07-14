@@ -10,7 +10,7 @@ type MyItemsSort = 'updated' | 'created' | 'title' | 'provider' | 'type' | 'stat
 export type TreeMode = 'bookmarks' | 'tickets' | 'prs';
 
 /** Union of all node types in the tree */
-type TreeNode = RepoNode | FileNode | GroupNode | BookmarkNode | MyTicketsSectionNode | MyPrsSectionNode | MyTicketNode | MyPrNode;
+type TreeNode = RepoNode | FileNode | GroupNode | BookmarkNode | MyTicketsSectionNode | MyPrsSectionNode | MyTicketNode | MyPrNode | MyItemDetailNode;
 
 class RepoNode {
   readonly type = 'repo' as const;
@@ -65,6 +65,17 @@ class MyPrNode {
   constructor(public readonly item: AggregatedMyPullRequest) { }
 }
 
+class MyItemDetailNode {
+  readonly type = 'myItemDetail' as const;
+  constructor(
+    public readonly label: string,
+    public readonly description?: string,
+    public readonly icon?: vscode.ThemeIcon,
+    public readonly command?: vscode.Command,
+    public readonly contextValue: string = 'myItemDetail',
+  ) { }
+}
+
 export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -80,6 +91,8 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myTicketsCache: AggregatedMyTicket[] | undefined;
   private myPrsCache: AggregatedMyPullRequest[] | undefined;
   private loadingMyItems = false;
+  private expandedMyTickets = new Set<string>();
+  private expandedMyPrs = new Set<string>();
 
   constructor(
     private readonly store: BookmarkStore,
@@ -155,6 +168,8 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         return this.myTicketTreeItem(element);
       case 'myPr':
         return this.myPrTreeItem(element);
+      case 'myItemDetail':
+        return this.myItemDetailTreeItem(element);
     }
   }
 
@@ -187,9 +202,79 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         await this.ensureMyItemsLoaded();
         return this.getFilteredSortedMyPrs().map((item) => new MyPrNode(item));
       case 'myTicket':
+        return this.expandedMyTickets.has(this.myTicketKey(element.item))
+          ? this.buildMyTicketChildren(element.item)
+          : [];
       case 'myPr':
+        return this.expandedMyPrs.has(this.myPrKey(element.item))
+          ? this.buildMyPrChildren(element.item)
+          : [];
+      case 'myItemDetail':
         return [];
     }
+  }
+
+  getParent(element: TreeNode): TreeNode | undefined {
+    switch (element.type) {
+      case 'repo':
+        return undefined;
+      case 'file':
+        if (this.mode !== 'bookmarks') { return undefined; }
+        return this.isSingleRepoRootMode()
+          ? undefined
+          : new RepoNode(element.repo, this.collapsedRepos.get(element.repo.repoName) ?? false);
+      case 'group':
+        if (this.mode !== 'bookmarks') { return undefined; }
+        return this.isSingleRepoRootMode()
+          ? undefined
+          : new RepoNode(element.repo, this.collapsedRepos.get(element.repo.repoName) ?? false);
+      case 'bookmark': {
+        if (this.mode !== 'bookmarks') { return undefined; }
+        const repo = element.repo;
+        const bm = element.bookmark;
+        const visible = this.applyFilters(repo.bookmarks);
+
+        switch (this.groupBy) {
+          case 'repo':
+          case 'file': {
+            const fileBookmarks = visible.filter((item) => item.location.filePath === bm.location.filePath);
+            return new FileNode(repo, bm.location.filePath, fileBookmarks);
+          }
+          case 'status': {
+            const label = bm.status ?? '(no status)';
+            const grouped = visible.filter((item) => (item.status ?? '(no status)') === label);
+            return new GroupNode(label, repo, grouped, statusIcon(label));
+          }
+          case 'ticket': {
+            const label = bm.ticket || '(no ticket)';
+            const grouped = visible.filter((item) => (item.ticket || '(no ticket)') === label);
+            return new GroupNode(label, repo, grouped, new vscode.ThemeIcon('issues'));
+          }
+        }
+      }
+      case 'myTicketsSection':
+      case 'myPrsSection':
+      case 'myTicket':
+      case 'myPr':
+        return undefined;
+      case 'myItemDetail':
+        return undefined;
+    }
+  }
+
+  public getBookmarkNodeById(bookmarkId: string): object | undefined {
+    const found = this.store.findBookmarkById(bookmarkId);
+    if (!found) { return undefined; }
+
+    const visible = this.applyFilters(found.repo.bookmarks);
+    const inView = visible.some((bookmark) => bookmark.id === found.bookmark.id);
+    if (!inView) { return undefined; }
+
+    return new BookmarkNode(found.repo, found.bookmark);
+  }
+
+  private isSingleRepoRootMode(): boolean {
+    return this.store.getState().repos.length === 1 && this.groupBy === 'repo';
   }
 
   // ── Root nodes ───────────────────────────────────────
@@ -345,20 +430,24 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myTicketTreeItem(node: MyTicketNode): vscode.TreeItem {
     const it = node.item;
     const glyph = this.myTicketTypeGlyph(it.item.type);
-    const item = new vscode.TreeItem(`${glyph} #${it.item.id} — ${it.item.title}`, vscode.TreeItemCollapsibleState.None);
-    const descParts = [it.providerLabel, it.item.type, it.item.state];
+    const key = this.myTicketKey(it);
+    const isExpanded = this.expandedMyTickets.has(key);
+    const stateBadge = `${this.ticketStateEmoji(it.item.state)} ${it.item.state}`;
+    const item = new vscode.TreeItem(
+      `${glyph} #${it.item.id} — ${it.item.title}`,
+      isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+    );
+    const descParts = [it.providerLabel, it.item.type, stateBadge];
     if (it.item.relation) { descParts.push(it.item.relation); }
     item.description = descParts.filter(Boolean).join(' · ');
     item.iconPath = this.myTicketTypeIcon(it.item.type);
     item.contextValue = 'myTicket';
 
-    if (it.item.url) {
-      item.command = {
-        command: 'vscode.open',
-        title: 'Open Ticket',
-        arguments: [vscode.Uri.parse(it.item.url)],
-      };
-    }
+    item.command = {
+      command: 'keepr.toggleMyItemExpand',
+      title: 'Toggle Ticket Details',
+      arguments: [{ kind: 'ticket', key }],
+    };
 
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**#${it.item.id} — ${it.item.title}**\n\n`);
@@ -393,19 +482,23 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myPrTreeItem(node: MyPrNode): vscode.TreeItem {
     const pr = node.item;
     const idLabel = pr.item.id ? `#${pr.item.id}` : 'PR';
-    const item = new vscode.TreeItem(`${idLabel} — ${pr.item.title}`, vscode.TreeItemCollapsibleState.None);
-    const descParts = [pr.providerLabel, pr.item.status];
+    const key = this.myPrKey(pr);
+    const isExpanded = this.expandedMyPrs.has(key);
+    const statusBadge = `${this.prStatusEmoji(pr.item.status)} ${pr.item.status}`;
+    const item = new vscode.TreeItem(
+      `${idLabel} — ${pr.item.title}`,
+      isExpanded ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+    );
+    const descParts = [pr.providerLabel, statusBadge];
     if (pr.item.relation) { descParts.push(pr.item.relation); }
     item.description = descParts.filter(Boolean).join(' · ');
     item.iconPath = new vscode.ThemeIcon('git-pull-request');
     item.contextValue = 'myPullRequest';
-    if (pr.item.url) {
-      item.command = {
-        command: 'vscode.open',
-        title: 'Open Pull Request',
-        arguments: [vscode.Uri.parse(pr.item.url)],
-      };
-    }
+    item.command = {
+      command: 'keepr.toggleMyItemExpand',
+      title: 'Toggle PR Details',
+      arguments: [{ kind: 'pr', key }],
+    };
 
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**${idLabel} — ${pr.item.title}**\n\n`);
@@ -417,6 +510,148 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
     item.tooltip = md;
     return item;
+  }
+
+  private myItemDetailTreeItem(node: MyItemDetailNode): vscode.TreeItem {
+    const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
+    item.description = node.description;
+    item.iconPath = node.icon;
+    item.contextValue = node.contextValue;
+    if (node.command) {
+      item.command = node.command;
+    }
+    return item;
+  }
+
+  private async buildMyTicketChildren(item: AggregatedMyTicket): Promise<TreeNode[]> {
+    const rows: TreeNode[] = [
+      new MyItemDetailNode('State', `${this.ticketStateEmoji(item.item.state)} ${item.item.state}`, new vscode.ThemeIcon('debug-pause')),
+      new MyItemDetailNode('Type', item.item.type || '(unknown)', new vscode.ThemeIcon('symbol-struct')),
+      new MyItemDetailNode('Provider', item.providerLabel, new vscode.ThemeIcon('plug')),
+    ];
+
+    if (item.item.assignedTo) {
+      rows.push(new MyItemDetailNode('Assigned', item.item.assignedTo, new vscode.ThemeIcon('person')));
+    }
+    if (item.item.relation) {
+      rows.push(new MyItemDetailNode('Relation', item.item.relation, new vscode.ThemeIcon('git-pull-request')));
+    }
+    if (item.item.updatedAt) {
+      rows.push(new MyItemDetailNode('Updated', item.item.updatedAt, new vscode.ThemeIcon('history')));
+    }
+
+    const details = await this.providers?.getTicketDetails(item.item.id);
+    if (details?.boardColumn && details.boardColumn !== details.state) {
+      rows.push(new MyItemDetailNode('Board Column', details.boardColumn, new vscode.ThemeIcon('project')));
+    }
+    if (details?.description) {
+      rows.push(new MyItemDetailNode('Description', this.truncate(details.description), new vscode.ThemeIcon('note')));
+    }
+    if (details?.acceptanceCriteria) {
+      rows.push(new MyItemDetailNode('Acceptance', this.truncate(details.acceptanceCriteria), new vscode.ThemeIcon('check-all')));
+    }
+
+    if (item.item.url) {
+      rows.push(new MyItemDetailNode(
+        'Open in Browser',
+        undefined,
+        new vscode.ThemeIcon('globe'),
+        { command: 'keepr.openMyItemInBrowser', title: 'Open in Browser', arguments: [item.item.url] },
+        'myItemAction',
+      ));
+      rows.push(new MyItemDetailNode(
+        'Copy Link',
+        undefined,
+        new vscode.ThemeIcon('copy'),
+        { command: 'keepr.copyMyItemUrl', title: 'Copy Link', arguments: [item.item.url] },
+        'myItemAction',
+      ));
+    }
+
+    return rows;
+  }
+
+  private buildMyPrChildren(item: AggregatedMyPullRequest): TreeNode[] {
+    const rows: TreeNode[] = [
+      new MyItemDetailNode('Status', `${this.prStatusEmoji(item.item.status)} ${item.item.status}`, new vscode.ThemeIcon('git-pull-request')),
+      new MyItemDetailNode('Provider', item.providerLabel, new vscode.ThemeIcon('plug')),
+    ];
+
+    if (item.item.relation) {
+      rows.push(new MyItemDetailNode('Relation', item.item.relation, new vscode.ThemeIcon('person')));
+    }
+    if (item.item.author) {
+      rows.push(new MyItemDetailNode('Author', item.item.author, new vscode.ThemeIcon('account')));
+    }
+    if (item.item.sourceBranch || item.item.targetBranch) {
+      rows.push(new MyItemDetailNode('Branches', `${item.item.sourceBranch ?? '?'} -> ${item.item.targetBranch ?? '?'}`, new vscode.ThemeIcon('git-branch')));
+    }
+    if (item.item.updatedAt) {
+      rows.push(new MyItemDetailNode('Updated', item.item.updatedAt, new vscode.ThemeIcon('history')));
+    }
+
+    if (item.item.url) {
+      rows.push(new MyItemDetailNode(
+        'Open in Browser',
+        undefined,
+        new vscode.ThemeIcon('globe'),
+        { command: 'keepr.openMyItemInBrowser', title: 'Open in Browser', arguments: [item.item.url] },
+        'myItemAction',
+      ));
+      rows.push(new MyItemDetailNode(
+        'Copy Link',
+        undefined,
+        new vscode.ThemeIcon('copy'),
+        { command: 'keepr.copyMyItemUrl', title: 'Copy Link', arguments: [item.item.url] },
+        'myItemAction',
+      ));
+    }
+
+    return rows;
+  }
+
+  private myTicketKey(item: AggregatedMyTicket): string {
+    return `${item.providerId}:ticket:${item.item.id}`;
+  }
+
+  private myPrKey(item: AggregatedMyPullRequest): string {
+    return `${item.providerId}:pr:${item.item.id ?? item.item.url}`;
+  }
+
+  public toggleMyItemExpand(kind: 'ticket' | 'pr', key: string): boolean {
+    if (kind === 'ticket' && this.mode !== 'tickets') { return false; }
+    if (kind === 'pr' && this.mode !== 'prs') { return false; }
+
+    const set = kind === 'ticket' ? this.expandedMyTickets : this.expandedMyPrs;
+    if (set.has(key)) {
+      set.delete(key);
+    } else {
+      set.add(key);
+    }
+    this.refresh();
+    return true;
+  }
+
+  private ticketStateEmoji(state: string | undefined): string {
+    const value = (state ?? '').toLowerCase();
+    if (value.includes('active') || value.includes('progress') || value.includes('committed')) { return '🟢'; }
+    if (value.includes('todo') || value.includes('new') || value.includes('backlog')) { return '🟡'; }
+    if (value.includes('test') || value.includes('review') || value.includes('qa')) { return '🟣'; }
+    if (value.includes('done') || value.includes('closed') || value.includes('removed') || value.includes('abandoned')) { return '⚪'; }
+    return '🔵';
+  }
+
+  private prStatusEmoji(status: string | undefined): string {
+    const value = (status ?? '').toLowerCase();
+    if (value.includes('active') || value.includes('open')) { return '🟢'; }
+    if (value.includes('completed') || value.includes('merged')) { return '✅'; }
+    if (value.includes('abandoned') || value.includes('declined') || value.includes('closed')) { return '⚪'; }
+    return '🔵';
+  }
+
+  private truncate(text: string, max = 120): string {
+    if (text.length <= max) { return text; }
+    return `${text.slice(0, max - 1)}…`;
   }
 
   private bookmarkTreeItem(node: BookmarkNode): vscode.TreeItem {

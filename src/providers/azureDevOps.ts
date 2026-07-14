@@ -31,7 +31,8 @@ export class AzureDevOpsProvider implements TicketProvider {
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<number, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
-    private authWarningShown = false;
+    private workItemWarningShown = false;
+    private pullRequestWarningShown = false;
 
     constructor(config?: AzureDevOpsConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
         this._config = config;
@@ -102,7 +103,7 @@ export class AzureDevOpsProvider implements TicketProvider {
 
             if (!wiqlResponse.ok) {
                 if (wiqlResponse.status === 401 || wiqlResponse.status === 403) {
-                    this.warnAuthScopeIssue();
+                    this.warnWorkItemAccessIssue();
                 }
                 return [];
             }
@@ -119,7 +120,12 @@ export class AzureDevOpsProvider implements TicketProvider {
                 },
             });
 
-            if (!batchResponse.ok) { return []; }
+            if (!batchResponse.ok) {
+                if (batchResponse.status === 401 || batchResponse.status === 403) {
+                    this.warnWorkItemAccessIssue();
+                }
+                return [];
+            }
 
             const batchData = await batchResponse.json() as {
                 value?: { id: number; fields: Record<string, any> }[];
@@ -249,7 +255,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const wiResp = await fetch(wiUrl, { headers });
             if (!wiResp.ok) {
                 if (wiResp.status === 401 || wiResp.status === 403) {
-                    this.warnAuthScopeIssue();
+                    this.warnWorkItemAccessIssue();
                 }
                 return undefined;
             }
@@ -412,7 +418,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const iterationsResp = await fetch(iterationsUrl, { headers });
             if (!iterationsResp.ok) {
                 if (iterationsResp.status === 401 || iterationsResp.status === 403) {
-                    this.warnAuthScopeIssue();
+                    this.warnPullRequestAccessIssue();
                 }
                 return undefined;
             }
@@ -425,7 +431,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const changesResp = await fetch(changesUrl, { headers });
             if (!changesResp.ok) {
                 if (changesResp.status === 401 || changesResp.status === 403) {
-                    this.warnAuthScopeIssue();
+                    this.warnPullRequestAccessIssue();
                 }
                 return undefined;
             }
@@ -515,11 +521,19 @@ export class AzureDevOpsProvider implements TicketProvider {
         return normalized || undefined;
     }
 
-    private warnAuthScopeIssue(): void {
-        if (this.authWarningShown) { return; }
-        this.authWarningShown = true;
+    private warnWorkItemAccessIssue(): void {
+        if (this.workItemWarningShown) { return; }
+        this.workItemWarningShown = true;
         vscode.window.showWarningMessage(
-            'KeepR: Azure DevOps token or project permissions are insufficient for full details/My PRs. Ensure PAT scopes include Work Items (Read) and Code (Read), and that the account has access to the target repositories.',
+            'KeepR: Unable to read Azure DevOps work items/tickets. Required PAT scope: Work Items (Read). Also ensure your account has access to this project.',
+        );
+    }
+
+    private warnPullRequestAccessIssue(): void {
+        if (this.pullRequestWarningShown) { return; }
+        this.pullRequestWarningShown = true;
+        vscode.window.showWarningMessage(
+            'KeepR: Unable to read Azure DevOps pull requests/code data. Required PAT scopes: Code (Read) and Code (Status). Also ensure your account has access to target repositories.',
         );
     }
 
@@ -539,7 +553,12 @@ export class AzureDevOpsProvider implements TicketProvider {
                 headers,
                 body: JSON.stringify({ query: wiql }),
             });
-            if (!wiqlResp.ok) { return []; }
+            if (!wiqlResp.ok) {
+                if (wiqlResp.status === 401 || wiqlResp.status === 403) {
+                    this.warnWorkItemAccessIssue();
+                }
+                return [];
+            }
 
             const wiqlData = await wiqlResp.json() as { workItems?: { id: number }[] };
             const ids = wiqlData.workItems?.map((w) => w.id) ?? [];
@@ -547,7 +566,12 @@ export class AzureDevOpsProvider implements TicketProvider {
 
             const batchUrl = `${this.normalizeUrl(orgUrl)}/_apis/wit/workitems?ids=${ids.join(',')}&fields=System.Id,System.Title,System.WorkItemType,System.State,System.AssignedTo,System.ChangedDate,System.CreatedDate&api-version=7.0`;
             const batchResp = await fetch(batchUrl, { headers: { Authorization: headers.Authorization } });
-            if (!batchResp.ok) { return []; }
+            if (!batchResp.ok) {
+                if (batchResp.status === 401 || batchResp.status === 403) {
+                    this.warnWorkItemAccessIssue();
+                }
+                return [];
+            }
 
             const batchData = await batchResp.json() as { value?: { id: number; fields: Record<string, any> }[] };
             return (batchData.value ?? []).map((wi) => ({
@@ -574,7 +598,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const url = `${this.normalizeUrl(orgUrl)}/_apis/connectionData?connectOptions=IncludeServices&lastChangeId=-1&lastChangeId64=-1&api-version=7.0`;
             const resp = await fetch(url, { headers });
             if (resp.status === 401 || resp.status === 403) {
-                this.warnAuthScopeIssue();
+                this.warnPullRequestAccessIssue();
             }
             if (!resp.ok) { return {}; }
             const data = await resp.json() as {
@@ -608,7 +632,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const reposUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories?api-version=7.0`;
             const reposResp = await fetch(reposUrl, { headers });
             if (reposResp.status === 401 || reposResp.status === 403) {
-                this.warnAuthScopeIssue();
+                this.warnPullRequestAccessIssue();
             }
             if (!reposResp.ok) { return []; }
 
@@ -625,7 +649,7 @@ export class AzureDevOpsProvider implements TicketProvider {
                 const prsUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/pullrequests?searchCriteria.status=active&$top=200&api-version=7.0`;
                 const prsResp = await fetch(prsUrl, { headers });
                 if (prsResp.status === 401 || prsResp.status === 403) {
-                    this.warnAuthScopeIssue();
+                    this.warnPullRequestAccessIssue();
                 }
                 if (!prsResp.ok) { continue; }
 
@@ -775,7 +799,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const url = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/git/pullrequests?${criteria}&searchCriteria.status=all&$top=50&api-version=7.0`;
             const resp = await fetch(url, { headers });
             if (resp.status === 401 || resp.status === 403) {
-                this.warnAuthScopeIssue();
+                this.warnPullRequestAccessIssue();
             }
             if (!resp.ok) { return []; }
 

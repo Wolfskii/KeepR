@@ -27,6 +27,8 @@ export function registerCommands(
         }
     };
 
+    const allTreeProviders = [treeProvider, ...myItemsTreeProviders];
+
     function getStatusLabels(): string[] {
         const config = vscode.workspace.getConfiguration('keepr');
         return config.get<string[]>('statusLabels', [
@@ -206,6 +208,10 @@ export function registerCommands(
         vscode.commands.registerCommand('keepr.resolveBookmarkById', async (bookmarkId: string) => {
             if (!bookmarkId) { return; }
             await vscode.commands.executeCommand('keepr.resolveBookmark', bookmarkId);
+        }),
+        vscode.commands.registerCommand('keepr.editBookmarkById', async (bookmarkId: string) => {
+            if (!bookmarkId) { return; }
+            await vscode.commands.executeCommand('keepr.editBookmark', { bookmark: { id: bookmarkId } });
         }),
     );
 
@@ -407,6 +413,35 @@ export function registerCommands(
     );
 
     disposables.push(
+        vscode.commands.registerCommand('keepr.toggleMyItemExpand', async (arg?: { kind?: 'ticket' | 'pr'; key?: string }) => {
+            const kind = arg?.kind;
+            const key = arg?.key;
+            if (!kind || !key) { return; }
+
+            for (const provider of allTreeProviders) {
+                provider.toggleMyItemExpand(kind, key);
+            }
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.openMyItemInBrowser', async (arg?: string | { item?: { item?: { url?: string } } }) => {
+            const url = typeof arg === 'string' ? arg : arg?.item?.item?.url;
+            if (!url) { return; }
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.copyMyItemUrl', async (arg?: string | { item?: { item?: { url?: string } } }) => {
+            const url = typeof arg === 'string' ? arg : arg?.item?.item?.url;
+            if (!url) { return; }
+            await vscode.env.clipboard.writeText(url);
+            vscode.window.showInformationMessage('KeepR: Link copied to clipboard.');
+        }),
+    );
+
+    disposables.push(
         vscode.commands.registerCommand('keepr.setMyItemsTicketFilter', async () => {
             const options = [
                 { label: 'All', value: 'all' },
@@ -552,6 +587,14 @@ export function registerCommands(
 
             // Focus the KeepR panel
             await vscode.commands.executeCommand('keepr.bookmarksView.focus');
+
+            const node = treeProvider.getBookmarkNodeById(bookmarkId);
+            if (!node) { return; }
+            try {
+                await treeView.reveal(node, { focus: true, select: true, expand: 3 });
+            } catch {
+                // Ignore reveal failures (for example when filtered out); panel is already focused.
+            }
         }),
     );
 
