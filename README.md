@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=wolfskii.keepr">
-    <img src="https://img.shields.io/badge/VS%20Code%20Marketplace-v0.1.25-007ACC?logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace Version" />
+    <img src="https://img.shields.io/badge/VS%20Code%20Marketplace-v0.1.26-007ACC?logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace Version" />
   </a>
   <a href="https://marketplace.visualstudio.com/items?itemName=wolfskii.keepr">
     <img src="https://vsmarketplacebadges.dev/installs-short/wolfskii.keepr.svg" alt="Installs" />
