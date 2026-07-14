@@ -754,241 +754,268 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   private getMyTicketDetailsCached(ticketId: string): TicketDetails | undefined {
-  const cached = this.myTicketDetailsCache.get(ticketId);
-  if (!cached) { return undefined; }
+    const cached = this.myTicketDetailsCache.get(ticketId);
+    if (!cached) { return undefined; }
 
-  const age = Date.now() - cached.fetchedAt;
-  if (age > BookmarkTreeProvider.DETAIL_CACHE_TTL) {
-    this.myTicketDetailsCache.delete(ticketId);
-    return undefined;
+    const age = Date.now() - cached.fetchedAt;
+    if (age > BookmarkTreeProvider.DETAIL_CACHE_TTL) {
+      this.myTicketDetailsCache.delete(ticketId);
+      return undefined;
+    }
+
+    return cached.data;
   }
 
-  return cached.data;
-}
-
   private fetchMyTicketDetailsAsync(ticketId: string): void {
-  if(!this.providers?.isConfigured()) { return; }
-if (this.myTicketDetailsFetching.has(ticketId)) { return; }
-const cached = this.myTicketDetailsCache.get(ticketId);
-if (cached && (Date.now() - cached.fetchedAt) < BookmarkTreeProvider.DETAIL_CACHE_TTL) {
-  return;
-}
-
-this.myTicketDetailsFetching.add(ticketId);
-this.providers.getTicketDetails(ticketId)
-  .then((details) => {
-    this.myTicketDetailsFetching.delete(ticketId);
-    if (details) {
-      this.myTicketDetailsCache.set(ticketId, { data: details, fetchedAt: Date.now() });
-      this._onDidChangeTreeData.fire(undefined);
+    if (!this.providers?.isConfigured()) { return; }
+    if (this.myTicketDetailsFetching.has(ticketId)) { return; }
+    const cached = this.myTicketDetailsCache.get(ticketId);
+    if (cached && (Date.now() - cached.fetchedAt) < BookmarkTreeProvider.DETAIL_CACHE_TTL) {
+      return;
     }
-  })
-  .catch(() => {
-    this.myTicketDetailsFetching.delete(ticketId);
-  });
+
+    this.myTicketDetailsFetching.add(ticketId);
+    this.providers.getTicketDetails(ticketId)
+      .then((details) => {
+        this.myTicketDetailsFetching.delete(ticketId);
+        if (details) {
+          this.myTicketDetailsCache.set(ticketId, { data: details, fetchedAt: Date.now() });
+          this._onDidChangeTreeData.fire(undefined);
+        }
+      })
+      .catch(() => {
+        this.myTicketDetailsFetching.delete(ticketId);
+      });
   }
 
   private fetchMyPrDetailsAsync(_item: AggregatedMyPullRequest): void {
-  // PR details are typically lightweight; no separate fetch needed for now
-  // Can be extended in the future if PR-specific details become available
-}
+    // PR details are typically lightweight; no separate fetch needed for now
+    // Can be extended in the future if PR-specific details become available
+  }
 
   private bookmarkTreeItem(node: BookmarkNode): vscode.TreeItem {
-  const bm = node.bookmark;
-  const lineNum = bm.location.line + 1;
-  const label = bm.label || bm.location.lineText?.trim() || `Line ${lineNum}`;
-  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+    const bm = node.bookmark;
+    const lineNum = bm.location.line + 1;
+    const label = bm.label || bm.location.lineText?.trim() || `Line ${lineNum}`;
+    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
 
-  // Description: line number + ticket + work item state + status
-  const parts: string[] = [`L${lineNum}`];
-  if (bm.ticket) {
-    const wi = this.getCachedWorkItem(bm.ticket);
-    if (wi) {
-      parts.push(`#${bm.ticket} [${wi.state}]`);
-    } else {
-      parts.push(`#${bm.ticket}`);
+    // Description: line number + ticket + work item state + status
+    const parts: string[] = [`L${lineNum}`];
+    if (bm.ticket) {
+      const wi = this.getCachedWorkItem(bm.ticket);
+      if (wi) {
+        parts.push(`#${bm.ticket} [${wi.state}]`);
+      } else {
+        parts.push(`#${bm.ticket}`);
+      }
     }
+    if (bm.status) { parts.push(bm.status); }
+    item.description = parts.join(' · ');
+
+    item.iconPath = statusIcon(bm.status);
+    item.contextValue = bm.ticket ? 'bookmarkWithTicket' : 'bookmark';
+    item.tooltip = this.buildTooltip(bm);
+
+    // Trigger async fetch for work item details (updates on next refresh)
+    if (bm.ticket) { this.fetchWorkItemAsync(bm.ticket); }
+
+    // Click → navigate to bookmark
+    const fileUri = this.store.resolveUri(node.repo, bm);
+    item.command = {
+      command: 'vscode.open',
+      title: 'Go to Bookmark',
+      arguments: [
+        fileUri,
+        {
+          selection: new vscode.Range(
+            bm.location.line,
+            bm.location.startColumn ?? 0,
+            bm.location.line,
+            bm.location.endColumn ?? 0,
+          ),
+        } as vscode.TextDocumentShowOptions,
+      ],
+    };
+
+    return item;
   }
-  if (bm.status) { parts.push(bm.status); }
-  item.description = parts.join(' · ');
-
-  item.iconPath = statusIcon(bm.status);
-  item.contextValue = bm.ticket ? 'bookmarkWithTicket' : 'bookmark';
-  item.tooltip = this.buildTooltip(bm);
-
-  // Trigger async fetch for work item details (updates on next refresh)
-  if (bm.ticket) { this.fetchWorkItemAsync(bm.ticket); }
-
-  // Click → navigate to bookmark
-  const fileUri = this.store.resolveUri(node.repo, bm);
-  item.command = {
-    command: 'vscode.open',
-    title: 'Go to Bookmark',
-    arguments: [
-      fileUri,
-      {
-        selection: new vscode.Range(
-          bm.location.line,
-          bm.location.startColumn ?? 0,
-          bm.location.line,
-          bm.location.endColumn ?? 0,
-        ),
-      } as vscode.TextDocumentShowOptions,
-    ],
-  };
-
-  return item;
-}
 
   private buildTooltip(bm: Bookmark): vscode.MarkdownString {
-  const md = new vscode.MarkdownString();
-  md.isTrusted = true;
-  if (bm.label) { md.appendMarkdown(`**${bm.label}**\n\n`); }
-  if (bm.ticket) {
-    const ticketUrl = this.getTicketUrl(bm.ticket);
-    const wi = this.getCachedWorkItem(bm.ticket);
-    if (ticketUrl) {
-      md.appendMarkdown(`🎫 Ticket: [#${bm.ticket}](${ticketUrl})`);
-    } else {
-      md.appendMarkdown(`🎫 Ticket: \`${bm.ticket}\``);
-    }
-    if (wi) {
-      md.appendMarkdown(` — **${wi.state}**`);
-      if (wi.boardColumn && wi.boardColumn !== wi.state) {
-        md.appendMarkdown(` (${wi.boardColumn})`);
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+    if (bm.label) { md.appendMarkdown(`**${bm.label}**\n\n`); }
+    if (bm.ticket) {
+      const ticketUrl = this.getTicketUrl(bm.ticket);
+      const wi = this.getCachedWorkItem(bm.ticket);
+      if (ticketUrl) {
+        md.appendMarkdown(`🎫 Ticket: [#${bm.ticket}](${ticketUrl})`);
+      } else {
+        md.appendMarkdown(`🎫 Ticket: \`${bm.ticket}\``);
       }
-      if (wi.type) { md.appendMarkdown(` · ${wi.type}`); }
-      if (wi.assignedTo) { md.appendMarkdown(` · ${wi.assignedTo}`); }
-    }
-    md.appendMarkdown('\n\n');
+      if (wi) {
+        md.appendMarkdown(` — **${wi.state}**`);
+        if (wi.boardColumn && wi.boardColumn !== wi.state) {
+          md.appendMarkdown(` (${wi.boardColumn})`);
+        }
+        if (wi.type) { md.appendMarkdown(` · ${wi.type}`); }
+        if (wi.assignedTo) { md.appendMarkdown(` · ${wi.assignedTo}`); }
+      }
+      md.appendMarkdown('\n\n');
 
-    // Show linked branches
-    if (wi && wi.branches.length > 0) {
-      md.appendMarkdown(`🌿 **Branches:**\n\n`);
-      for (const branch of wi.branches) {
-        md.appendMarkdown(`- \`${branch}\`\n`);
+      // Show linked branches
+      if (wi && wi.branches.length > 0) {
+        md.appendMarkdown(`🌿 **Branches:**\n\n`);
+        for (const branch of wi.branches) {
+          md.appendMarkdown(`- \`${branch}\`\n`);
+        }
+        md.appendMarkdown('\n');
       }
-      md.appendMarkdown('\n');
-    }
 
-    // Show linked PRs
-    if (wi && wi.pullRequests.length > 0) {
-      md.appendMarkdown(`🔀 **Pull Requests:**\n\n`);
-      for (const pr of wi.pullRequests) {
-        const statusBadge = pr.status === 'completed' ? '✅' : pr.status === 'active' ? '🟢' : '⚪';
-        md.appendMarkdown(`- ${statusBadge} [${pr.title}](${pr.url}) (${pr.status})\n`);
+      // Show linked PRs
+      if (wi && wi.pullRequests.length > 0) {
+        md.appendMarkdown(`🔀 **Pull Requests:**\n\n`);
+        for (const pr of wi.pullRequests) {
+          const statusBadge = pr.status === 'completed' ? '✅' : pr.status === 'active' ? '🟢' : '⚪';
+          md.appendMarkdown(`- ${statusBadge} [${pr.title}](${pr.url}) (${pr.status})\n`);
+        }
+        md.appendMarkdown('\n');
       }
-      md.appendMarkdown('\n');
     }
+    if (bm.status) { md.appendMarkdown(`📌 Status: ${bm.status}\n\n`); }
+    md.appendMarkdown(`📄 ${bm.location.filePath}:${bm.location.line + 1}\n\n`);
+    if (bm.location.lineText) {
+      md.appendCodeblock(bm.location.lineText.trim(), '');
+    }
+    return md;
   }
-  if (bm.status) { md.appendMarkdown(`📌 Status: ${bm.status}\n\n`); }
-  md.appendMarkdown(`📄 ${bm.location.filePath}:${bm.location.line + 1}\n\n`);
-  if (bm.location.lineText) {
-    md.appendCodeblock(bm.location.lineText.trim(), '');
-  }
-  return md;
-}
 
   private getTicketUrl(ticket: string): string | undefined {
-  return this.providers?.getTicketUrl(ticket);
-}
+    return this.providers?.getTicketUrl(ticket);
+  }
 
   // ── Async work item fetching ─────────────────────────
 
   private getCachedWorkItem(ticket: string): TicketDetails | undefined {
-  const cached = this.workItemCache.get(ticket);
-  return cached ?? undefined;
-}
+    const cached = this.workItemCache.get(ticket);
+    return cached ?? undefined;
+  }
 
   private fetchWorkItemAsync(ticket: string): void {
-  if(!this.providers?.isConfigured()) { return; }
-if (this.workItemCache.has(ticket) || this.pendingFetches.has(ticket)) { return; }
+    if (!this.providers?.isConfigured()) { return; }
+    if (this.workItemCache.has(ticket) || this.pendingFetches.has(ticket)) { return; }
 
-this.pendingFetches.add(ticket);
-this.providers.getTicketDetails(ticket).then((details) => {
-  this.pendingFetches.delete(ticket);
-  this.workItemCache.set(ticket, details ?? null);
-  if (details) {
-    // Refresh tree to show the newly fetched data
-    this._onDidChangeTreeData.fire(undefined);
+    this.pendingFetches.add(ticket);
+    this.providers.getTicketDetails(ticket).then((details) => {
+      this.pendingFetches.delete(ticket);
+      this.workItemCache.set(ticket, details ?? null);
+      if (details) {
+        // Refresh tree to show the newly fetched data
+        this._onDidChangeTreeData.fire(undefined);
+      }
+    }).catch(() => {
+      this.pendingFetches.delete(ticket);
+    });
   }
-}).catch(() => {
-  this.pendingFetches.delete(ticket);
-});
+
+  /** Force re-fetch all work item data */
+  refreshWorkItems(): void {
+    this.workItemCache.clear();
+    this.providers?.clearCache();
+    this.myTicketsCache = undefined;
+    this.myPrsCache = undefined;
+    this.refresh();
   }
 
-/** Force re-fetch all work item data */
-refreshWorkItems(): void {
-  this.workItemCache.clear();
-  this.providers?.clearCache();
-  this.myTicketsCache = undefined;
-  this.myPrsCache = undefined;
-  this.refresh();
-}
+  refreshMyItems(): void {
+    this.myTicketsCache = undefined;
+    this.myPrsCache = undefined;
+    this.refresh();
+  }
 
-refreshMyItems(): void {
-  this.myTicketsCache = undefined;
-  this.myPrsCache = undefined;
-  this.refresh();
-}
+  async getAvailableMyTicketStates(): Promise<string[]> {
+    await this.ensureMyItemsLoaded();
+    return [...new Set((this.myTicketsCache ?? []).map((item) => item.item.state).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }
 
-  async getAvailableMyTicketStates(): Promise < string[] > {
-  await this.ensureMyItemsLoaded();
-  return [...new Set((this.myTicketsCache ?? []).map((item) => item.item.state).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-}
+  async getAvailableMyPrStates(): Promise<string[]> {
+    await this.ensureMyItemsLoaded();
+    const knownStates = ['active', 'completed', 'abandoned', 'closed', 'merged', 'declined', 'draft'];
+    const discoveredStates = (this.myPrsCache ?? [])
+      .map((item) => item.item.status || item.item.state)
+      .filter(Boolean) as string[];
 
-  async getAvailableMyPrStates(): Promise < string[] > {
-  await this.ensureMyItemsLoaded();
-  const knownStates = ['active', 'completed', 'abandoned', 'closed', 'merged', 'declined', 'draft'];
-  const discoveredStates = (this.myPrsCache ?? [])
-    .map((item) => item.item.status || item.item.state)
-    .filter(Boolean) as string[];
-
-  const allStates = [...new Set([...knownStates, ...discoveredStates])];
-  return allStates.sort((a, b) => a.localeCompare(b));
-}
+    const allStates = [...new Set([...knownStates, ...discoveredStates])];
+    return allStates.sort((a, b) => a.localeCompare(b));
+  }
 
   private isMyItemsEnabled(): boolean {
-  return vscode.workspace.getConfiguration('keepr').get<boolean>('myItems.enabled', true);
-}
+    return vscode.workspace.getConfiguration('keepr').get<boolean>('myItems.enabled', true);
+  }
 
-  private async ensureMyItemsLoaded(): Promise < void> {
-  if(this.loadingMyItems) { return; }
-if (this.myTicketsCache && this.myPrsCache) { return; }
-if (!this.providers) {
-  this.myTicketsCache = [];
-  this.myPrsCache = [];
-  return;
-}
+  private async ensureMyItemsLoaded(): Promise<void> {
+    if (this.loadingMyItems) { return; }
+    if (this.myTicketsCache && this.myPrsCache) { return; }
+    if (!this.providers) {
+      this.myTicketsCache = [];
+      this.myPrsCache = [];
+      return;
+    }
 
-this.loadingMyItems = true;
-try {
-  const [tickets, prs] = await Promise.all([
-    this.providers.getMyTicketsAcrossProviders(),
-    this.providers.getMyPullRequestsAcrossProviders(),
-  ]);
-  this.myTicketsCache = tickets;
-  this.myPrsCache = prs;
-} finally {
-  this.loadingMyItems = false;
-  this._onDidChangeTreeData.fire(undefined);
-}
+    this.loadingMyItems = true;
+    try {
+      const [tickets, prs] = await Promise.all([
+        this.providers.getMyTicketsAcrossProviders(),
+        this.providers.getMyPullRequestsAcrossProviders(),
+      ]);
+      this.myTicketsCache = tickets;
+      this.myPrsCache = prs;
+    } finally {
+      this.loadingMyItems = false;
+      this._onDidChangeTreeData.fire(undefined);
+    }
   }
 
   private getFilteredSortedMyTickets(): AggregatedMyTicket[] {
-  const all = [...(this.myTicketsCache ?? [])];
-  const config = vscode.workspace.getConfiguration('keepr');
-  const filter = config.get<string>('myItems.ticketFilter', 'all');
-  const visibleStates = config.get<string[]>('myItems.ticketVisibleStates', []);
-  const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
+    const all = [...(this.myTicketsCache ?? [])];
+    const config = vscode.workspace.getConfiguration('keepr');
+    const filter = config.get<string>('myItems.ticketFilter', 'all');
+    const visibleStates = config.get<string[]>('myItems.ticketVisibleStates', []);
+    const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
 
-  const relationFiltered = filter === 'all' ? all : all.filter((t) => (t.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
-  const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.state, 'ticket');
-  return stateFiltered.sort((a, b) => {
-    const stateOrder = this.compareTicketStatePriority(a.item.state, b.item.state);
-    if (stateOrder !== 0) { return stateOrder; }
+    const relationFiltered = filter === 'all' ? all : all.filter((t) => (t.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
+    const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.state, 'ticket');
+    return stateFiltered.sort((a, b) => {
+      const stateOrder = this.compareTicketStatePriority(a.item.state, b.item.state);
+      if (stateOrder !== 0) { return stateOrder; }
 
-    return this.compareMyItems(
+      return this.compareMyItems(
+        a.item.title,
+        b.item.title,
+        a.providerLabel,
+        b.providerLabel,
+        a.item.updatedAt,
+        b.item.updatedAt,
+        a.item.createdAt,
+        b.item.createdAt,
+        a.item.type,
+        b.item.type,
+        a.item.state,
+        b.item.state,
+        sortBy,
+      );
+    });
+  }
+
+  private getFilteredSortedMyPrs(): AggregatedMyPullRequest[] {
+    const all = [...(this.myPrsCache ?? [])];
+    const config = vscode.workspace.getConfiguration('keepr');
+    const filter = config.get<string>('myItems.prFilter', 'all');
+    const visibleStates = config.get<string[]>('myItems.prVisibleStates', []);
+    const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
+
+    const relationFiltered = filter === 'all' ? all : all.filter((p) => (p.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
+    const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.status || item.item.state, 'pr');
+    return stateFiltered.sort((a, b) => this.compareMyItems(
       a.item.title,
       b.item.title,
       a.providerLabel,
@@ -997,137 +1024,110 @@ try {
       b.item.updatedAt,
       a.item.createdAt,
       b.item.createdAt,
-      a.item.type,
-      b.item.type,
-      a.item.state,
-      b.item.state,
+      undefined,
+      undefined,
+      a.item.status || a.item.state,
+      b.item.status || b.item.state,
       sortBy,
-    );
-  });
-}
-
-  private getFilteredSortedMyPrs(): AggregatedMyPullRequest[] {
-  const all = [...(this.myPrsCache ?? [])];
-  const config = vscode.workspace.getConfiguration('keepr');
-  const filter = config.get<string>('myItems.prFilter', 'all');
-  const visibleStates = config.get<string[]>('myItems.prVisibleStates', []);
-  const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
-
-  const relationFiltered = filter === 'all' ? all : all.filter((p) => (p.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
-  const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.status || item.item.state, 'pr');
-  return stateFiltered.sort((a, b) => this.compareMyItems(
-    a.item.title,
-    b.item.title,
-    a.providerLabel,
-    b.providerLabel,
-    a.item.updatedAt,
-    b.item.updatedAt,
-    a.item.createdAt,
-    b.item.createdAt,
-    undefined,
-    undefined,
-    a.item.status || a.item.state,
-    b.item.status || b.item.state,
-    sortBy,
-  ));
-}
+    ));
+  }
 
   private filterByVisibleStates<T>(
-  items: T[],
-  visibleStates: string[],
-  getState: (item: T) => string | undefined,
-  scope: 'ticket' | 'pr',
-): T[] {
-  if (visibleStates.length > 0) {
-    const allowed = new Set(visibleStates.map((state) => state.toLowerCase()));
-    return items.filter((item) => {
-      const state = getState(item);
-      return !state || allowed.has(state.toLowerCase());
-    });
-  }
+    items: T[],
+    visibleStates: string[],
+    getState: (item: T) => string | undefined,
+    scope: 'ticket' | 'pr',
+  ): T[] {
+    if (visibleStates.length > 0) {
+      const allowed = new Set(visibleStates.map((state) => state.toLowerCase()));
+      return items.filter((item) => {
+        const state = getState(item);
+        return !state || allowed.has(state.toLowerCase());
+      });
+    }
 
-  return items.filter((item) => !this.isCompletedState(getState(item), scope));
-}
+    return items.filter((item) => !this.isCompletedState(getState(item), scope));
+  }
 
   private isCompletedState(state: string | undefined, scope: 'ticket' | 'pr'): boolean {
-  const normalized = (state ?? '').trim().toLowerCase();
-  if (!normalized) { return false; }
+    const normalized = (state ?? '').trim().toLowerCase();
+    if (!normalized) { return false; }
 
-  if (scope === 'pr') {
-    return ['completed', 'abandoned', 'closed', 'merged', 'declined'].includes(normalized);
+    if (scope === 'pr') {
+      return ['completed', 'abandoned', 'closed', 'merged', 'declined'].includes(normalized);
+    }
+
+    return ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'].includes(normalized);
   }
-
-  return ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'].includes(normalized);
-}
 
   private compareTicketStatePriority(stateA: string | undefined, stateB: string | undefined): number {
-  return this.ticketStatePriority(stateA) - this.ticketStatePriority(stateB);
-}
+    return this.ticketStatePriority(stateA) - this.ticketStatePriority(stateB);
+  }
 
   private ticketStatePriority(state: string | undefined): number {
-  const normalized = (state ?? '').trim().toLowerCase();
-  if (!normalized) { return 50; }
+    const normalized = (state ?? '').trim().toLowerCase();
+    if (!normalized) { return 50; }
 
-  if (this.matchesAny(normalized, ['active', 'in progress', 'committed', 'doing', 'open', 'current', 'started'])) {
-    return 10;
+    if (this.matchesAny(normalized, ['active', 'in progress', 'committed', 'doing', 'open', 'current', 'started'])) {
+      return 10;
+    }
+
+    if (this.matchesAny(normalized, ['todo', 'to do', 'new', 'approved', 'ready', 'planned', 'backlog'])) {
+      return 20;
+    }
+
+    if (this.matchesAny(normalized, ['pr', 'pull request', 'review', 'testing', 'test', 'qa', 'verify', 'validation'])) {
+      return 30;
+    }
+
+    if (this.matchesAny(normalized, ['blocked', 'waiting', 'hold'])) {
+      return 40;
+    }
+
+    if (this.matchesAny(normalized, ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'])) {
+      return 90;
+    }
+
+    return 50;
   }
-
-  if (this.matchesAny(normalized, ['todo', 'to do', 'new', 'approved', 'ready', 'planned', 'backlog'])) {
-    return 20;
-  }
-
-  if (this.matchesAny(normalized, ['pr', 'pull request', 'review', 'testing', 'test', 'qa', 'verify', 'validation'])) {
-    return 30;
-  }
-
-  if (this.matchesAny(normalized, ['blocked', 'waiting', 'hold'])) {
-    return 40;
-  }
-
-  if (this.matchesAny(normalized, ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'])) {
-    return 90;
-  }
-
-  return 50;
-}
 
   private matchesAny(value: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => value.includes(pattern));
-}
+    return patterns.some((pattern) => value.includes(pattern));
+  }
 
   private compareMyItems(
-  titleA: string,
-  titleB: string,
-  providerA: string,
-  providerB: string,
-  updatedA: string | undefined,
-  updatedB: string | undefined,
-  createdA: string | undefined,
-  createdB: string | undefined,
-  typeA: string | undefined,
-  typeB: string | undefined,
-  statusA: string | undefined,
-  statusB: string | undefined,
-  sortBy: MyItemsSort,
-): number {
-  switch (sortBy) {
-    case 'title':
-      return titleA.localeCompare(titleB);
-    case 'provider':
-      return providerA.localeCompare(providerB);
-    case 'type':
-      return (typeA ?? '').localeCompare(typeB ?? '') || titleA.localeCompare(titleB);
-    case 'status':
-      return (statusA ?? '').localeCompare(statusB ?? '') || titleA.localeCompare(titleB);
-    case 'created':
-      return (Date.parse(createdB ?? '') || 0) - (Date.parse(createdA ?? '') || 0);
-    case 'updated':
-    default:
-      return (Date.parse(updatedB ?? '') || 0) - (Date.parse(updatedA ?? '') || 0);
+    titleA: string,
+    titleB: string,
+    providerA: string,
+    providerB: string,
+    updatedA: string | undefined,
+    updatedB: string | undefined,
+    createdA: string | undefined,
+    createdB: string | undefined,
+    typeA: string | undefined,
+    typeB: string | undefined,
+    statusA: string | undefined,
+    statusB: string | undefined,
+    sortBy: MyItemsSort,
+  ): number {
+    switch (sortBy) {
+      case 'title':
+        return titleA.localeCompare(titleB);
+      case 'provider':
+        return providerA.localeCompare(providerB);
+      case 'type':
+        return (typeA ?? '').localeCompare(typeB ?? '') || titleA.localeCompare(titleB);
+      case 'status':
+        return (statusA ?? '').localeCompare(statusB ?? '') || titleA.localeCompare(titleB);
+      case 'created':
+        return (Date.parse(createdB ?? '') || 0) - (Date.parse(createdA ?? '') || 0);
+      case 'updated':
+      default:
+        return (Date.parse(updatedB ?? '') || 0) - (Date.parse(updatedA ?? '') || 0);
+    }
   }
-}
 
-dispose(): void {
-  this._onDidChangeTreeData.dispose();
-}
+  dispose(): void {
+    this._onDidChangeTreeData.dispose();
+  }
 }
