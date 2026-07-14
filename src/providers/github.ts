@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TicketProvider, TicketInfo, TicketDetails } from './types';
+import { TicketProvider, TicketInfo, TicketDetails, UserRelatedPullRequestInfo, UserRelatedTicketInfo } from './types';
 
 export interface GitHubConfig {
     owner: string;
@@ -16,6 +16,7 @@ export class GitHubProvider implements TicketProvider {
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<string, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
+    private authWarningShown = false;
 
     constructor(config?: GitHubConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
         this._config = config;
@@ -97,8 +98,8 @@ export class GitHubProvider implements TicketProvider {
                     { headers },
                 );
                 if (!resp.ok) {
-                    if (resp.status === 401) {
-                        vscode.window.showWarningMessage('KeepR: GitHub token is invalid or expired.');
+                    if (resp.status === 401 || resp.status === 403) {
+                        this.warnAuthScopeIssue();
                     }
                     return [];
                 }
@@ -111,6 +112,57 @@ export class GitHubProvider implements TicketProvider {
             console.error('KeepR: GitHub search failed', err);
             return [];
         }
+    }
+
+    async getMyTickets(): Promise<UserRelatedTicketInfo[]> {
+        const qualifiers: Array<{ q: string; relation: string }> = [
+            { q: 'assignee:@me is:issue', relation: 'assigned' },
+            { q: 'author:@me is:issue', relation: 'created' },
+            { q: 'mentions:@me is:issue', relation: 'mentioned' },
+            { q: 'commenter:@me is:issue', relation: 'commented' },
+        ];
+
+        const all = new Map<string, UserRelatedTicketInfo>();
+        for (const query of qualifiers) {
+            const items = await this.searchRelatedIssues(query.q, query.relation);
+            for (const item of items) {
+                const prev = all.get(item.id);
+                if (!prev) {
+                    all.set(item.id, item);
+                } else if (prev.relation && item.relation && prev.relation !== item.relation) {
+                    prev.relation = 'involved';
+                }
+            }
+        }
+
+        return [...all.values()];
+    }
+
+    async getMyPullRequests(): Promise<UserRelatedPullRequestInfo[]> {
+        const qualifiers: Array<{ q: string; relation: string }> = [
+            { q: 'author:@me is:pr', relation: 'authored' },
+            { q: 'review-requested:@me is:pr', relation: 'reviewer' },
+            { q: 'reviewed-by:@me is:pr', relation: 'approved' },
+            { q: 'mentions:@me is:pr', relation: 'mentioned' },
+            { q: 'commenter:@me is:pr', relation: 'commented' },
+            { q: 'involves:@me is:pr', relation: 'involved' },
+        ];
+
+        const all = new Map<string, UserRelatedPullRequestInfo>();
+        for (const query of qualifiers) {
+            const items = await this.searchRelatedPullRequests(query.q, query.relation);
+            for (const item of items) {
+                const key = item.id ?? item.url;
+                const prev = all.get(key);
+                if (!prev) {
+                    all.set(key, item);
+                } else if (prev.relation && item.relation && prev.relation !== item.relation) {
+                    prev.relation = 'involved';
+                }
+            }
+        }
+
+        return [...all.values()];
     }
 
     async getTicketDetails(ticketId: string): Promise<TicketDetails | undefined> {
@@ -139,12 +191,19 @@ export class GitHubProvider implements TicketProvider {
                 `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(id)}`,
                 { headers },
             );
-            if (!issueResp.ok) { return undefined; }
+            if (!issueResp.ok) {
+                if (issueResp.status === 401 || issueResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
+                return undefined;
+            }
             const issue = await issueResp.json() as GitHubIssue;
 
             const details: TicketDetails = {
                 ...this.mapIssue(issue),
                 boardColumn: undefined,
+                description: issue.body,
+                children: [],
                 branches: [],
                 pullRequests: [],
                 _fetchedAt: Date.now(),
@@ -157,6 +216,9 @@ export class GitHubProvider implements TicketProvider {
                         `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(id)}/timeline?per_page=100`,
                         { headers },
                     );
+                    if (eventsResp.status === 401 || eventsResp.status === 403) {
+                        this.warnAuthScopeIssue();
+                    }
                     if (eventsResp.ok) {
                         const events = await eventsResp.json() as GitHubTimelineEvent[];
                         const seenBranches = new Set<string>();
@@ -219,7 +281,79 @@ export class GitHubProvider implements TicketProvider {
             type: issue.pull_request ? 'Pull Request' : 'Issue',
             state: issue.state ?? 'unknown',
             assignedTo: issue.assignee?.login,
+            url: issue.html_url,
         };
+    }
+
+    private warnAuthScopeIssue(): void {
+        if (this.authWarningShown) { return; }
+        this.authWarningShown = true;
+        vscode.window.showWarningMessage(
+            'KeepR: GitHub token missing permissions for full details. For fine-grained PATs, grant Issues (Read) and Pull requests (Read).',
+        );
+    }
+
+    private async searchRelatedIssues(queryPart: string, relation: string): Promise<UserRelatedTicketInfo[]> {
+        const owner = this.owner;
+        const repo = this.repo;
+        const token = await this.getToken();
+        if (!owner || !repo) { return []; }
+
+        try {
+            const headers: Record<string, string> = {
+                'Accept': 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            };
+            if (token) { headers['Authorization'] = `Bearer ${token}`; }
+
+            const q = encodeURIComponent(`repo:${owner}/${repo} ${queryPart}`);
+            const resp = await fetch(`https://api.github.com/search/issues?q=${q}&per_page=30`, { headers });
+            if (!resp.ok) { return []; }
+
+            const data = await resp.json() as { items?: GitHubIssue[] };
+            return (data.items ?? []).map((issue) => ({
+                ...this.mapIssue(issue),
+                relation,
+                createdAt: issue.created_at,
+                updatedAt: issue.updated_at,
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    private async searchRelatedPullRequests(queryPart: string, relation: string): Promise<UserRelatedPullRequestInfo[]> {
+        const owner = this.owner;
+        const repo = this.repo;
+        const token = await this.getToken();
+        if (!owner || !repo) { return []; }
+
+        try {
+            const headers: Record<string, string> = {
+                'Accept': 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            };
+            if (token) { headers['Authorization'] = `Bearer ${token}`; }
+
+            const q = encodeURIComponent(`repo:${owner}/${repo} ${queryPart}`);
+            const resp = await fetch(`https://api.github.com/search/issues?q=${q}&per_page=30`, { headers });
+            if (!resp.ok) { return []; }
+
+            const data = await resp.json() as { items?: GitHubIssue[] };
+            return (data.items ?? []).map((issue) => ({
+                id: String(issue.number),
+                title: issue.title ?? `PR #${issue.number}`,
+                url: issue.html_url ?? '',
+                status: issue.state ?? 'unknown',
+                state: issue.state,
+                relation,
+                createdAt: issue.created_at,
+                updatedAt: issue.updated_at,
+                author: issue.user?.login,
+            }));
+        } catch {
+            return [];
+        }
     }
 }
 
@@ -228,9 +362,13 @@ interface GitHubIssue {
     title?: string;
     state?: string;
     html_url?: string;
+    body?: string;
     assignee?: { login?: string };
     pull_request?: { url?: string };
     labels?: { name?: string }[];
+    created_at?: string;
+    updated_at?: string;
+    user?: { login?: string };
 }
 
 interface GitHubTimelineEvent {

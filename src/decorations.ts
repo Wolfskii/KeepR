@@ -142,9 +142,15 @@ export class DecorationManager {
 
     // Command link to reveal in panel
     const cmdUri = vscode.Uri.parse(
-      `command:keepr.revealBookmark?${encodeURIComponent(JSON.stringify(bm.id))}`,
+      `command:keepr.revealBookmark?${encodeURIComponent(JSON.stringify([bm.id]))}`,
     );
-    md.appendMarkdown(`\n\n[Show in KeepR panel](${cmdUri})`);
+    const resolveUri = vscode.Uri.parse(
+      `command:keepr.resolveBookmarkById?${encodeURIComponent(JSON.stringify([bm.id]))}`,
+    );
+    const removeUri = vscode.Uri.parse(
+      `command:keepr.removeBookmarkById?${encodeURIComponent(JSON.stringify([bm.id]))}`,
+    );
+    md.appendMarkdown(`\n\n[Show in KeepR panel](${cmdUri}) · [$(check) Resolve](${resolveUri}) · [$(trash) Remove](${removeUri})`);
 
     return md;
   }

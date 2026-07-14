@@ -37,6 +37,21 @@
                 "icon": "$(trash)"
             },
             {
+                "command": "keepr.resolveBookmark",
+                "title": "KeepR: Mark Bookmark as Resolved",
+                "icon": "$(check)"
+            },
+            {
+                "command": "keepr.resolveBookmarkById",
+                "title": "KeepR: Resolve Bookmark by ID",
+                "icon": "$(check)"
+            },
+            {
+                "command": "keepr.removeBookmarkById",
+                "title": "KeepR: Remove Bookmark by ID",
+                "icon": "$(trash)"
+            },
+            {
                 "command": "keepr.editBookmark",
                 "title": "KeepR: Edit Bookmark",
                 "icon": "$(edit)"
@@ -110,6 +125,26 @@
                 "command": "keepr.refreshWorkItems",
                 "title": "KeepR: Refresh Work Item Status",
                 "icon": "$(refresh)"
+            },
+            {
+                "command": "keepr.refreshMyItems",
+                "title": "KeepR: Refresh My Tickets and PRs",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "keepr.setMyItemsTicketFilter",
+                "title": "KeepR: Set My Tickets Filter",
+                "icon": "$(filter)"
+            },
+            {
+                "command": "keepr.setMyItemsPrFilter",
+                "title": "KeepR: Set My PRs Filter",
+                "icon": "$(filter)"
+            },
+            {
+                "command": "keepr.setMyItemsSort",
+                "title": "KeepR: Set My Items Sort",
+                "icon": "$(list-selection)"
             },
             {
                 "command": "keepr.addConnection",
@@ -190,6 +225,26 @@
                     "group": "navigation@6"
                 },
                 {
+                    "command": "keepr.refreshMyItems",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@7"
+                },
+                {
+                    "command": "keepr.setMyItemsTicketFilter",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@8"
+                },
+                {
+                    "command": "keepr.setMyItemsPrFilter",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@9"
+                },
+                {
+                    "command": "keepr.setMyItemsSort",
+                    "when": "view == keepr.bookmarksView",
+                    "group": "navigation@10"
+                },
+                {
                     "command": "keepr.addConnection",
                     "when": "view == keepr.providersView",
                     "group": "navigation@1"
@@ -207,6 +262,11 @@
                     "group": "inline@2"
                 },
                 {
+                    "command": "keepr.resolveBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
+                    "group": "inline@3"
+                },
+                {
                     "command": "keepr.editBookmark",
                     "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
                     "group": "1_actions@1"
@@ -217,14 +277,19 @@
                     "group": "1_actions@2"
                 },
                 {
-                    "command": "keepr.openTicket",
-                    "when": "view == keepr.bookmarksView && viewItem == bookmarkWithTicket",
-                    "group": "inline@3"
+                    "command": "keepr.resolveBookmark",
+                    "when": "view == keepr.bookmarksView && viewItem =~ /bookmark/",
+                    "group": "1_actions@3"
                 },
                 {
                     "command": "keepr.openTicket",
                     "when": "view == keepr.bookmarksView && viewItem == bookmarkWithTicket",
-                    "group": "1_actions@3"
+                    "group": "inline@4"
+                },
+                {
+                    "command": "keepr.openTicket",
+                    "when": "view == keepr.bookmarksView && viewItem == bookmarkWithTicket",
+                    "group": "1_actions@4"
                 },
                 {
                     "command": "keepr.renameRepo",
@@ -372,7 +437,7 @@
                         },
                         "status": {
                             "type": "string",
-                            "description": "Optional status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note'"
+                            "description": "Optional status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note', 'Resolved'"
                         }
                     },
                     "required": [
@@ -444,7 +509,7 @@
                         },
                         "status": {
                             "type": "string",
-                            "description": "New status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note' (empty string to clear)"
+                            "description": "New status: 'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note', 'Resolved' (empty string to clear)"
                         }
                     }
                 }
@@ -462,7 +527,7 @@
             {
                 "name": "keepr_getTicketDetails",
                 "displayName": "Get Ticket Details",
-                "modelDescription": "Fetch live details for a ticket/work item linked to a bookmark, using the active ticket provider. Returns the ticket's state, type, title, assigned person, board column (Azure DevOps), associated branches, and pull requests. Can look up by ticket ID directly, or fetch details for all bookmarks that have linked tickets.",
+                "modelDescription": "Fetch live details for a ticket/work item linked to a bookmark, using the active ticket provider. Returns the ticket's state, type, title, assigned person, parent/child hierarchy when available, board column (Azure DevOps), description/acceptance criteria when available, associated branches, and pull requests. Can look up by ticket ID directly, or fetch details for all bookmarks that have linked tickets.",
                 "icon": "$(link-external)",
                 "inputSchema": {
                     "type": "object",
@@ -474,6 +539,82 @@
                         "all": {
                             "type": "boolean",
                             "description": "If true, fetch details for all unique tickets linked to bookmarks"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "keepr_searchTickets",
+                "displayName": "Search Tickets",
+                "modelDescription": "Search the active provider (Azure DevOps, GitHub, or Jira) for work items/issues/pull requests by ID or free-text query. Returns matching ticket IDs, titles, states, types, assignees, and URLs.",
+                "icon": "$(search)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search string, ticket id, or PBI number"
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ]
+                }
+            },
+            {
+                "name": "keepr_getHierarchy",
+                "displayName": "Get Ticket Hierarchy",
+                "modelDescription": "Return only parent/child hierarchy for a ticket or for all tickets linked to bookmarks. Useful for feature -> PBI -> task views.",
+                "icon": "$(type-hierarchy)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "ticketId": {
+                            "type": "string",
+                            "description": "Ticket/PBI ID to build hierarchy for"
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "If true, build hierarchy for all linked ticket IDs"
+                        },
+                        "depth": {
+                            "type": "number",
+                            "description": "Child depth to expand (1-5, default 2)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "keepr_getMyItems",
+                "displayName": "Get My Items",
+                "modelDescription": "Get tickets/PBIs/features and pull requests related to the logged-in user across all configured providers, with relation/state/provider filtering and sorting.",
+                "icon": "$(account)",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "description": "What to return: tickets, pullRequests, or all"
+                        },
+                        "relation": {
+                            "type": "string",
+                            "description": "Relation filter, e.g. reviewer, approved, authored, assigned, mentioned, commented"
+                        },
+                        "state": {
+                            "type": "string",
+                            "description": "State/status filter, e.g. open, active, draft"
+                        },
+                        "provider": {
+                            "type": "string",
+                            "description": "Provider name filter, e.g. azure, github, jira"
+                        },
+                        "sortBy": {
+                            "type": "string",
+                            "description": "Sort by updated, created, title, or provider"
+                        },
+                        "limit": {
+                            "type": "number",
+                            "description": "Maximum returned items per scope (1-200, default 50)"
                         }
                     }
                 }
@@ -491,6 +632,54 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Highlight bookmarked lines with a background color"
+                },
+                "keepr.inlineActionsEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show inline Resolve/Remove actions on bookmarked rows"
+                },
+                "keepr.myItems.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show My Tickets/PBIs/Features and My Pull Requests sections in the Bookmarks view"
+                },
+                "keepr.myItems.ticketFilter": {
+                    "type": "string",
+                    "default": "all",
+                    "enum": [
+                        "all",
+                        "assigned",
+                        "created",
+                        "mentioned",
+                        "commented",
+                        "involved"
+                    ],
+                    "description": "Filter for My Tickets/PBIs/Features section"
+                },
+                "keepr.myItems.prFilter": {
+                    "type": "string",
+                    "default": "all",
+                    "enum": [
+                        "all",
+                        "authored",
+                        "reviewer",
+                        "approved",
+                        "mentioned",
+                        "commented",
+                        "involved"
+                    ],
+                    "description": "Filter for My Pull Requests section"
+                },
+                "keepr.myItems.sortBy": {
+                    "type": "string",
+                    "default": "updated",
+                    "enum": [
+                        "updated",
+                        "created",
+                        "title",
+                        "provider"
+                    ],
+                    "description": "Sort order for My Tickets and My Pull Requests sections"
                 },
                 "keepr.defaultGroupBy": {
                     "type": "string",
@@ -512,7 +701,8 @@
                         "Bad Practice",
                         "To Implement",
                         "Review",
-                        "Note"
+                        "Note",
+                        "Resolved"
                     ],
                     "description": "Available status labels for bookmarks"
                 },

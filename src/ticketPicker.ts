@@ -120,11 +120,12 @@ export async function pickTicket(
         qp.onDidAccept(() => {
             const selected = qp.selectedItems[0];
             if (selected && '_ticket' in selected) {
-                resolve(selected._ticket || undefined);
+                // Preserve empty-string ticket from "(none)"; undefined means cancelled.
+                resolve(selected._ticket);
             } else if (qp.value) {
                 resolve(qp.value);
             } else {
-                resolve(undefined);
+                resolve('');
             }
             qp.dispose();
         });

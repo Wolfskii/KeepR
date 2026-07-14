@@ -22,7 +22,7 @@ export function registerCommands(
     function getStatusLabels(): string[] {
         const config = vscode.workspace.getConfiguration('keepr');
         return config.get<string[]>('statusLabels', [
-            'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note',
+            'To Fix', 'Bug', 'Performance', 'Bad Practice', 'To Implement', 'Review', 'Note', 'Resolved',
         ]);
     }
 
@@ -36,6 +36,7 @@ export function registerCommands(
             case 'To Implement': return '$(lightbulb)';
             case 'Review': return '$(eye)';
             case 'Note': return '$(note)';
+            case 'Resolved': return '$(check)';
             default: return '$(bookmark)';
         }
     }
@@ -126,19 +127,77 @@ export function registerCommands(
     // ── Remove Bookmark ──────────────────────────────────
 
     disposables.push(
-        vscode.commands.registerCommand('keepr.removeBookmark', async (node?: { bookmark?: { id: string } }) => {
-            if (node?.bookmark) {
-                await store.removeBookmark(node.bookmark.id);
+        vscode.commands.registerCommand('keepr.removeBookmark', async (arg?: string | { bookmark?: { id: string } }) => {
+            let bookmarkId: string | undefined;
+
+            if (typeof arg === 'string') {
+                bookmarkId = arg;
+            } else if (arg?.bookmark?.id) {
+                bookmarkId = arg.bookmark.id;
             } else {
                 // From editor context
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 const existing = store.findBookmarkAtLine(editor.document.uri, editor.selection.active.line);
                 if (existing) {
-                    await store.removeBookmark(existing.bookmark.id);
+                    bookmarkId = existing.bookmark.id;
                 }
             }
+
+            if (!bookmarkId) { return; }
+            await store.removeBookmark(bookmarkId);
             decorations.updateDecorations();
+        }),
+    );
+
+    // ── Resolve Bookmark ───────────────────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.resolveBookmark', async (arg?: string | { bookmark?: { id: string } }) => {
+            let bookmarkId: string | undefined;
+
+            if (typeof arg === 'string') {
+                bookmarkId = arg;
+            } else if (arg?.bookmark?.id) {
+                bookmarkId = arg.bookmark.id;
+            } else {
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) { return; }
+                const existing = store.findBookmarkAtLine(editor.document.uri, editor.selection.active.line);
+                if (existing) {
+                    bookmarkId = existing.bookmark.id;
+                }
+            }
+
+            if (!bookmarkId) {
+                vscode.window.showInformationMessage('No bookmark found at cursor.');
+                return;
+            }
+
+            await store.updateBookmark(bookmarkId, { status: 'Resolved' });
+
+            const found = store.findBookmarkById(bookmarkId);
+            if (found) {
+                const uri = store.resolveUri(found.repo, found.bookmark);
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const line = found.bookmark.location.line;
+                const lineText = line >= 0 && line < doc.lineCount ? doc.lineAt(line).text : undefined;
+                await store.setBookmarkLineText(bookmarkId, lineText);
+            }
+
+            decorations.updateDecorations();
+        }),
+    );
+
+    // Convenience aliases for inline editor controls
+    disposables.push(
+        vscode.commands.registerCommand('keepr.removeBookmarkById', async (bookmarkId: string) => {
+            if (!bookmarkId) { return; }
+            await vscode.commands.executeCommand('keepr.removeBookmark', bookmarkId);
+        }),
+        vscode.commands.registerCommand('keepr.resolveBookmarkById', async (bookmarkId: string) => {
+            if (!bookmarkId) { return; }
+            await vscode.commands.executeCommand('keepr.resolveBookmark', bookmarkId);
         }),
     );
 
@@ -327,6 +386,65 @@ export function registerCommands(
     disposables.push(
         vscode.commands.registerCommand('keepr.clearFilter', () => {
             treeProvider.clearFilter();
+        }),
+    );
+
+    // ── My Items filters/sort ──────────────────────────
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.refreshMyItems', () => {
+            treeProvider.refreshMyItems();
+            vscode.window.showInformationMessage('KeepR: My Tickets/PRs refreshed.');
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setMyItemsTicketFilter', async () => {
+            const options = [
+                { label: 'All', value: 'all' },
+                { label: 'Assigned', value: 'assigned' },
+                { label: 'Created', value: 'created' },
+                { label: 'Mentioned', value: 'mentioned' },
+                { label: 'Commented', value: 'commented' },
+                { label: 'Involved', value: 'involved' },
+            ];
+            const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Tickets filter' });
+            if (!pick) { return; }
+            await vscode.workspace.getConfiguration('keepr').update('myItems.ticketFilter', pick.value, vscode.ConfigurationTarget.Global);
+            treeProvider.refreshMyItems();
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setMyItemsPrFilter', async () => {
+            const options = [
+                { label: 'All', value: 'all' },
+                { label: 'Authored', value: 'authored' },
+                { label: 'Reviewer', value: 'reviewer' },
+                { label: 'Approved', value: 'approved' },
+                { label: 'Mentioned', value: 'mentioned' },
+                { label: 'Commented', value: 'commented' },
+                { label: 'Involved', value: 'involved' },
+            ];
+            const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Pull Requests filter' });
+            if (!pick) { return; }
+            await vscode.workspace.getConfiguration('keepr').update('myItems.prFilter', pick.value, vscode.ConfigurationTarget.Global);
+            treeProvider.refreshMyItems();
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setMyItemsSort', async () => {
+            const options = [
+                { label: 'Updated (Newest first)', value: 'updated' },
+                { label: 'Created (Newest first)', value: 'created' },
+                { label: 'Title (A-Z)', value: 'title' },
+                { label: 'Provider (A-Z)', value: 'provider' },
+            ];
+            const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Items sort order' });
+            if (!pick) { return; }
+            await vscode.workspace.getConfiguration('keepr').update('myItems.sortBy', pick.value, vscode.ConfigurationTarget.Global);
+            treeProvider.refreshMyItems();
         }),
     );
 

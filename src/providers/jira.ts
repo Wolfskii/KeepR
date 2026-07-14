@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TicketProvider, TicketInfo, TicketDetails } from './types';
+import { TicketProvider, TicketInfo, TicketDetails, UserRelatedPullRequestInfo, UserRelatedTicketInfo } from './types';
 
 export interface JiraConfig {
     baseUrl: string;
@@ -17,6 +17,7 @@ export class JiraProvider implements TicketProvider {
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<string, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
+    private authWarningShown = false;
 
     constructor(config?: JiraConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
         this._config = config;
@@ -101,8 +102,8 @@ export class JiraProvider implements TicketProvider {
             const resp = await fetch(url, { headers });
 
             if (!resp.ok) {
-                if (resp.status === 401) {
-                    vscode.window.showWarningMessage('KeepR: Jira API token is invalid or expired.');
+                if (resp.status === 401 || resp.status === 403) {
+                    this.warnAuthScopeIssue();
                 }
                 return [];
             }
@@ -116,6 +117,37 @@ export class JiraProvider implements TicketProvider {
             console.error('KeepR: Jira search failed', err);
             return [];
         }
+    }
+
+    async getMyTickets(): Promise<UserRelatedTicketInfo[]> {
+        const baseUrl = this.baseUrl;
+        const email = this.email;
+        const token = await this.getToken();
+        if (!baseUrl || !token) { return []; }
+        if (!this.isServer && !email) { return []; }
+
+        try {
+            const headers = this.authHeaders(email, token);
+            const jql = '(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) ORDER BY updated DESC';
+            const url = `${this.normalizeUrl(baseUrl)}/rest/api/${this.apiVersion}/search?jql=${encodeURIComponent(jql)}&maxResults=50&fields=summary,issuetype,status,assignee,updated,created`;
+            const resp = await fetch(url, { headers });
+            if (!resp.ok) { return []; }
+
+            const data = await resp.json() as { issues?: JiraIssue[] };
+            return (data.issues ?? []).map((issue) => ({
+                ...this.mapIssue(issue),
+                relation: 'involved',
+                updatedAt: issue.fields?.updated,
+                createdAt: issue.fields?.created,
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    async getMyPullRequests(): Promise<UserRelatedPullRequestInfo[]> {
+        // Jira does not expose first-class PR entities tied directly to user context in a portable way.
+        return [];
     }
 
     async getTicketDetails(ticketId: string): Promise<TicketDetails | undefined> {
@@ -137,18 +169,44 @@ export class JiraProvider implements TicketProvider {
             const base = this.normalizeUrl(baseUrl);
 
             // Fetch issue with status and development info
-            const issueUrl = `${base}/rest/api/${this.apiVersion}/issue/${encodeURIComponent(key)}?fields=summary,issuetype,status,assignee`;
+            const issueUrl = `${base}/rest/api/${this.apiVersion}/issue/${encodeURIComponent(key)}?fields=summary,description,issuetype,status,assignee,parent,subtasks`;
             const issueResp = await fetch(issueUrl, { headers });
-            if (!issueResp.ok) { return undefined; }
+            if (!issueResp.ok) {
+                if (issueResp.status === 401 || issueResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
+                return undefined;
+            }
             const issue = await issueResp.json() as JiraIssue;
 
             const details: TicketDetails = {
                 ...this.mapIssue(issue),
                 boardColumn: issue.fields?.status?.statusCategory?.name,
+                description: this.jiraDescriptionToText(issue.fields?.description),
+                children: (issue.fields?.subtasks ?? []).map((sub) => ({
+                    id: sub.key ?? String(sub.id),
+                    title: sub.fields?.summary ?? '',
+                    type: sub.fields?.issuetype?.name ?? '',
+                    state: sub.fields?.status?.name ?? '',
+                    assignedTo: sub.fields?.assignee?.displayName,
+                    url: this.getTicketUrl(sub.key ?? String(sub.id)),
+                })),
                 branches: [],
                 pullRequests: [],
                 _fetchedAt: Date.now(),
             };
+
+            if (issue.fields?.parent) {
+                const parent = issue.fields.parent;
+                details.parent = {
+                    id: parent.key ?? String(parent.id),
+                    title: parent.fields?.summary ?? '',
+                    type: parent.fields?.issuetype?.name ?? '',
+                    state: parent.fields?.status?.name ?? '',
+                    assignedTo: parent.fields?.assignee?.displayName,
+                    url: this.getTicketUrl(parent.key ?? String(parent.id)),
+                };
+            }
 
             // Try to get dev info (branches/PRs) from the development field
             // This requires the Jira Development Tool integration to be enabled
@@ -235,7 +293,52 @@ export class JiraProvider implements TicketProvider {
             type: issue.fields?.issuetype?.name ?? '',
             state: issue.fields?.status?.name ?? '',
             assignedTo: issue.fields?.assignee?.displayName,
+            url: this.getTicketUrl(issue.key ?? String(issue.id)),
         };
+    }
+
+    private warnAuthScopeIssue(): void {
+        if (this.authWarningShown) { return; }
+        this.authWarningShown = true;
+        vscode.window.showWarningMessage(
+            'KeepR: Jira credentials may be missing permissions. Ensure Browse Project access and linked Development Tools access for branch/PR details.',
+        );
+    }
+
+    private jiraDescriptionToText(description: unknown): string | undefined {
+        if (!description) { return undefined; }
+        if (typeof description === 'string') {
+            return description.trim() || undefined;
+        }
+
+        const lines: string[] = [];
+
+        const walk = (node: any): void => {
+            if (!node) { return; }
+            if (typeof node === 'string') {
+                lines.push(node);
+                return;
+            }
+            if (node.type === 'text' && typeof node.text === 'string') {
+                lines.push(node.text);
+            }
+            if (Array.isArray(node.content)) {
+                for (const child of node.content) {
+                    walk(child);
+                }
+                if (node.type === 'paragraph' || node.type === 'listItem') {
+                    lines.push('\n');
+                }
+            }
+        };
+
+        walk(description);
+
+        const normalized = lines.join('')
+            .replace(/\r\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        return normalized || undefined;
     }
 }
 
@@ -244,12 +347,17 @@ interface JiraIssue {
     key?: string;
     fields?: {
         summary?: string;
+        description?: unknown;
         issuetype?: { name?: string };
         status?: {
             name?: string;
             statusCategory?: { name?: string };
         };
         assignee?: { displayName?: string };
+        updated?: string;
+        created?: string;
+        parent?: JiraIssue;
+        subtasks?: JiraIssue[];
     };
 }
 

@@ -7,13 +7,56 @@ export interface TicketInfo {
     type: string;
     state: string;
     assignedTo?: string;
+    url?: string;
+}
+
+export interface PullRequestChangeSummary {
+    fileCount?: number;
+    changedFiles: string[];
+}
+
+export interface PullRequestInfo {
+    id?: string;
+    title: string;
+    url: string;
+    status: string;
+    sourceBranch?: string;
+    targetBranch?: string;
+    changes?: PullRequestChangeSummary;
+}
+
+export interface UserRelatedTicketInfo extends TicketInfo {
+    relation?: string;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
+export interface UserRelatedPullRequestInfo extends PullRequestInfo {
+    relation?: string;
+    state?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    author?: string;
+}
+
+export interface TicketHierarchyRef {
+    id: string;
+    title: string;
+    type: string;
+    state: string;
+    assignedTo?: string;
+    url?: string;
 }
 
 /** Full ticket details with branches, PRs, and cache timestamp */
 export interface TicketDetails extends TicketInfo {
     boardColumn?: string;
+    description?: string;
+    acceptanceCriteria?: string;
+    parent?: TicketHierarchyRef;
+    children: TicketHierarchyRef[];
     branches: string[];
-    pullRequests: { title: string; url: string; status: string }[];
+    pullRequests: PullRequestInfo[];
     _fetchedAt: number;
 }
 
@@ -36,6 +79,12 @@ export interface TicketProvider {
 
     /** Search for tickets by text or ID */
     searchTickets(query: string): Promise<TicketInfo[]>;
+
+    /** Tickets related to the logged-in user (assigned/mentioned/created/etc.) */
+    getMyTickets(): Promise<UserRelatedTicketInfo[]>;
+
+    /** Pull requests related to the logged-in user (review/authored/mentioned/etc.) */
+    getMyPullRequests(): Promise<UserRelatedPullRequestInfo[]>;
 
     /** Get full details including state, branches, PRs */
     getTicketDetails(ticketId: string): Promise<TicketDetails | undefined>;

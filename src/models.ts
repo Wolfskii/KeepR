@@ -9,6 +9,7 @@ export type BookmarkStatus =
     | 'To Implement'
     | 'Review'
     | 'Note'
+    | 'Resolved'
     | string; // allow custom statuses from settings
 
 export interface BookmarkLocation {
@@ -80,6 +81,7 @@ export function statusColor(status?: BookmarkStatus): string {
         case 'To Implement': return '#5b9fe8';
         case 'Review': return '#b070e8';
         case 'Note': return '#5be870';
+        case 'Resolved': return '#38b26d';
         default: return '#e2b714';
     }
 }
@@ -101,6 +103,8 @@ export function statusIcon(status?: BookmarkStatus): vscode.ThemeIcon {
             return new vscode.ThemeIcon('eye', new vscode.ThemeColor('charts.purple'));
         case 'Note':
             return new vscode.ThemeIcon('note', new vscode.ThemeColor('charts.green'));
+        case 'Resolved':
+            return new vscode.ThemeIcon('check', new vscode.ThemeColor('charts.green'));
         default:
             return new vscode.ThemeIcon('bookmark');
     }

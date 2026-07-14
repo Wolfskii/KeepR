@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TicketProvider, TicketInfo, TicketDetails } from './types';
+import { TicketProvider, TicketInfo, TicketDetails, PullRequestInfo, TicketHierarchyRef, UserRelatedPullRequestInfo, UserRelatedTicketInfo } from './types';
 
 export interface AzureDevOpsConfig {
     orgUrl: string;
@@ -16,6 +16,7 @@ export class AzureDevOpsProvider implements TicketProvider {
     private _secrets: vscode.SecretStorage | undefined;
     private detailsCache = new Map<number, TicketDetails>();
     private static CACHE_TTL = 2 * 60 * 1000;
+    private authWarningShown = false;
 
     constructor(config?: AzureDevOpsConfig, tokenGetter?: () => Promise<string | undefined>, tokenSetter?: (token: string) => Promise<void>) {
         this._config = config;
@@ -85,8 +86,8 @@ export class AzureDevOpsProvider implements TicketProvider {
             });
 
             if (!wiqlResponse.ok) {
-                if (wiqlResponse.status === 401) {
-                    vscode.window.showWarningMessage('KeepR: Azure DevOps PAT is invalid or expired.');
+                if (wiqlResponse.status === 401 || wiqlResponse.status === 403) {
+                    this.warnAuthScopeIssue();
                 }
                 return [];
             }
@@ -115,11 +116,76 @@ export class AzureDevOpsProvider implements TicketProvider {
                 type: wi.fields['System.WorkItemType'] ?? '',
                 state: wi.fields['System.State'] ?? '',
                 assignedTo: wi.fields['System.AssignedTo']?.displayName,
+                url: this.getTicketUrl(String(wi.id)),
             }));
         } catch (err) {
             console.error('KeepR: Azure DevOps search failed', err);
             return [];
         }
+    }
+
+    async getMyTickets(): Promise<UserRelatedTicketInfo[]> {
+        const orgUrl = this.orgUrl;
+        const project = this.project;
+        const pat = await this.getToken();
+        if (!orgUrl || !project || !pat) { return []; }
+
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${Buffer.from(':' + pat).toString('base64')}`,
+        };
+
+        const assignedQuery = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND [System.AssignedTo] = @Me ORDER BY [System.ChangedDate] DESC`;
+        const createdQuery = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND [System.CreatedBy] = @Me ORDER BY [System.ChangedDate] DESC`;
+
+        const assigned = await this.queryMyWorkItemsByWiql(assignedQuery, 'assigned', headers);
+        const created = await this.queryMyWorkItemsByWiql(createdQuery, 'created', headers);
+
+        const map = new Map<string, UserRelatedTicketInfo>();
+        for (const item of [...assigned, ...created]) {
+            const prev = map.get(item.id);
+            if (!prev) {
+                map.set(item.id, item);
+                continue;
+            }
+            if (prev.relation && item.relation && prev.relation !== item.relation) {
+                prev.relation = 'assigned+created';
+            }
+        }
+
+        return [...map.values()];
+    }
+
+    async getMyPullRequests(): Promise<UserRelatedPullRequestInfo[]> {
+        const orgUrl = this.orgUrl;
+        const project = this.project;
+        const pat = await this.getToken();
+        if (!orgUrl || !project || !pat) { return []; }
+
+        const headers = {
+            'Authorization': `Basic ${Buffer.from(':' + pat).toString('base64')}`,
+        };
+
+        const identityId = await this.getCurrentIdentityId(headers);
+        if (!identityId) { return []; }
+
+        const reviewed = await this.queryMyPullRequests(project, identityId, 'reviewer', headers);
+        const authored = await this.queryMyPullRequests(project, identityId, 'authored', headers);
+
+        const map = new Map<string, UserRelatedPullRequestInfo>();
+        for (const item of [...reviewed, ...authored]) {
+            const key = item.id ?? item.url;
+            const prev = map.get(key);
+            if (!prev) {
+                map.set(key, item);
+                continue;
+            }
+            if (prev.relation && item.relation && prev.relation !== item.relation) {
+                prev.relation = 'reviewer+authored';
+            }
+        }
+
+        return [...map.values()];
     }
 
     async getTicketDetails(ticketId: string): Promise<TicketDetails | undefined> {
@@ -144,7 +210,12 @@ export class AzureDevOpsProvider implements TicketProvider {
 
             const wiUrl = `${base}/_apis/wit/workitems/${id}?$expand=relations&api-version=7.0`;
             const wiResp = await fetch(wiUrl, { headers });
-            if (!wiResp.ok) { return undefined; }
+            if (!wiResp.ok) {
+                if (wiResp.status === 401 || wiResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
+                return undefined;
+            }
             const wiData = await wiResp.json() as {
                 id: number;
                 fields: Record<string, any>;
@@ -158,14 +229,28 @@ export class AzureDevOpsProvider implements TicketProvider {
                 type: fields['System.WorkItemType'] ?? '',
                 state: fields['System.State'] ?? '',
                 assignedTo: fields['System.AssignedTo']?.displayName,
+                url: this.getTicketUrl(String(wiData.id)),
                 boardColumn: fields['System.BoardColumn'],
+                description: this.toPlainText(fields['System.Description']),
+                acceptanceCriteria: this.toPlainText(fields['Microsoft.VSTS.Common.AcceptanceCriteria']),
+                children: [],
                 branches: [],
                 pullRequests: [],
                 _fetchedAt: Date.now(),
             };
 
             const relations = wiData.relations ?? [];
+            const parentIds = new Set<number>();
+            const childIds = new Set<number>();
             for (const rel of relations) {
+                if (rel.rel === 'System.LinkTypes.Hierarchy-Reverse') {
+                    const parentId = this.extractWorkItemIdFromRelationUrl(rel.url);
+                    if (parentId) { parentIds.add(parentId); }
+                } else if (rel.rel === 'System.LinkTypes.Hierarchy-Forward') {
+                    const childId = this.extractWorkItemIdFromRelationUrl(rel.url);
+                    if (childId) { childIds.add(childId); }
+                }
+
                 if (rel.rel === 'ArtifactLink') {
                     const artifactUrl = rel.url ?? '';
                     const name = rel.attributes?.['name'] ?? '';
@@ -174,11 +259,22 @@ export class AzureDevOpsProvider implements TicketProvider {
                         const branchName = this.extractBranchName(artifactUrl);
                         if (branchName) { details.branches.push(branchName); }
                     } else if (artifactUrl.includes('/GIT/PullRequestId/') || name === 'Pull Request') {
-                        const pr = await this.fetchPrFromArtifact(artifactUrl, headers, base);
+                        const pr = await this.fetchPrFromArtifact(artifactUrl, headers, base, project);
                         if (pr) { details.pullRequests.push(pr); }
                     }
                 }
             }
+
+            const hierarchy = await this.fetchHierarchyRefs([...parentIds, ...childIds], headers, base);
+            if (parentIds.size > 0) {
+                const firstParentId = [...parentIds][0];
+                if (firstParentId) {
+                    details.parent = hierarchy.get(firstParentId);
+                }
+            }
+            details.children = [...childIds]
+                .map((cid) => hierarchy.get(cid))
+                .filter((child): child is TicketHierarchyRef => !!child);
 
             this.detailsCache.set(id, details);
             return details;
@@ -220,13 +316,13 @@ export class AzureDevOpsProvider implements TicketProvider {
         artifactUrl: string,
         headers: Record<string, string>,
         baseUrl: string,
-    ): Promise<{ title: string; url: string; status: string } | undefined> {
+        project: string,
+    ): Promise<PullRequestInfo | undefined> {
         try {
             const parts = artifactUrl.split('/');
             const prId = parts[parts.length - 1];
             if (!prId || isNaN(parseInt(prId, 10))) { return undefined; }
 
-            const project = this.project!;
             const prUrl = `${baseUrl}/${encodeURIComponent(project)}/_apis/git/pullrequests/${prId}?api-version=7.0`;
             const resp = await fetch(prUrl, { headers });
             if (!resp.ok) { return undefined; }
@@ -234,21 +330,281 @@ export class AzureDevOpsProvider implements TicketProvider {
             const pr = await resp.json() as {
                 title?: string;
                 status?: string;
-                repository?: { name?: string };
+                repository?: { id?: string; name?: string };
                 pullRequestId?: number;
+                sourceRefName?: string;
+                targetRefName?: string;
             };
 
             const orgUrl = this.orgUrl!;
             const repoName = pr.repository?.name ?? '';
             const webUrl = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${pr.pullRequestId}`;
 
-            return {
+            const sourceBranch = this.normalizeRefName(pr.sourceRefName);
+            const targetBranch = this.normalizeRefName(pr.targetRefName);
+
+            const prInfo: PullRequestInfo = {
+                id: pr.pullRequestId ? String(pr.pullRequestId) : prId,
                 title: pr.title ?? `PR #${prId}`,
                 url: webUrl,
                 status: pr.status ?? 'unknown',
+                sourceBranch,
+                targetBranch,
+            };
+
+            const repositoryId = pr.repository?.id;
+            if (repositoryId && pr.pullRequestId) {
+                prInfo.changes = await this.fetchPrChanges(baseUrl, project, repositoryId, pr.pullRequestId, headers);
+            }
+
+            return prInfo;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async fetchPrChanges(
+        baseUrl: string,
+        project: string,
+        repositoryId: string,
+        pullRequestId: number,
+        headers: Record<string, string>,
+    ): Promise<{ fileCount?: number; changedFiles: string[] } | undefined> {
+        try {
+            const iterationsUrl = `${baseUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/iterations?api-version=7.0`;
+            const iterationsResp = await fetch(iterationsUrl, { headers });
+            if (!iterationsResp.ok) {
+                if (iterationsResp.status === 401 || iterationsResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
+                return undefined;
+            }
+
+            const iterationsData = await iterationsResp.json() as { value?: { id?: number }[] };
+            const maxIteration = Math.max(...(iterationsData.value ?? []).map((i) => i.id ?? 0));
+            if (!maxIteration) { return undefined; }
+
+            const changesUrl = `${baseUrl}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repositoryId)}/pullRequests/${pullRequestId}/iterations/${maxIteration}/changes?api-version=7.0&$top=1000`;
+            const changesResp = await fetch(changesUrl, { headers });
+            if (!changesResp.ok) {
+                if (changesResp.status === 401 || changesResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
+                return undefined;
+            }
+
+            const changesData = await changesResp.json() as {
+                changeEntries?: { item?: { path?: string } }[];
+                changeCounts?: Record<string, number>;
+            };
+
+            const changedFiles = (changesData.changeEntries ?? [])
+                .map((c) => c.item?.path)
+                .filter((p): p is string => !!p)
+                .slice(0, 50);
+
+            const fileCount = Object.values(changesData.changeCounts ?? {}).reduce((sum, n) => sum + n, 0);
+
+            return {
+                fileCount: fileCount || changedFiles.length,
+                changedFiles,
             };
         } catch {
             return undefined;
+        }
+    }
+
+    private normalizeRefName(ref?: string): string | undefined {
+        if (!ref) { return undefined; }
+        return ref.replace(/^refs\/heads\//, '');
+    }
+
+    private extractWorkItemIdFromRelationUrl(url: string | undefined): number | undefined {
+        if (!url) { return undefined; }
+        const match = url.match(/\/workItems\/(\d+)$/i);
+        if (!match) { return undefined; }
+        const id = parseInt(match[1], 10);
+        return isNaN(id) ? undefined : id;
+    }
+
+    private async fetchHierarchyRefs(
+        ids: number[],
+        headers: Record<string, string>,
+        baseUrl: string,
+    ): Promise<Map<number, TicketHierarchyRef>> {
+        const result = new Map<number, TicketHierarchyRef>();
+        if (ids.length === 0) { return result; }
+
+        try {
+            const uniqueIds = [...new Set(ids)].filter((id) => Number.isFinite(id));
+            const url = `${baseUrl}/_apis/wit/workitems?ids=${uniqueIds.join(',')}&fields=System.Id,System.Title,System.WorkItemType,System.State,System.AssignedTo&api-version=7.0`;
+            const resp = await fetch(url, { headers });
+            if (!resp.ok) { return result; }
+
+            const data = await resp.json() as { value?: { id: number; fields: Record<string, any> }[] };
+            for (const wi of data.value ?? []) {
+                result.set(wi.id, {
+                    id: String(wi.id),
+                    title: wi.fields['System.Title'] ?? '',
+                    type: wi.fields['System.WorkItemType'] ?? '',
+                    state: wi.fields['System.State'] ?? '',
+                    assignedTo: wi.fields['System.AssignedTo']?.displayName,
+                    url: this.getTicketUrl(String(wi.id)),
+                });
+            }
+        } catch {
+            // Ignore hierarchy fetch failures; base details are still useful.
+        }
+
+        return result;
+    }
+
+    private toPlainText(value: unknown): string | undefined {
+        if (typeof value !== 'string') { return undefined; }
+        const withoutTags = value
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/p>/gi, '\n\n')
+            .replace(/<li>/gi, '- ')
+            .replace(/<\/li>/gi, '\n')
+            .replace(/<[^>]+>/g, '');
+        const normalized = withoutTags
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/\r\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+        return normalized || undefined;
+    }
+
+    private warnAuthScopeIssue(): void {
+        if (this.authWarningShown) { return; }
+        this.authWarningShown = true;
+        vscode.window.showWarningMessage(
+            'KeepR: Azure DevOps token missing permissions for full details. Required scopes: Work Items (Read) and Code (Read).',
+        );
+    }
+
+    private async queryMyWorkItemsByWiql(
+        wiql: string,
+        relation: string,
+        headers: Record<string, string>,
+    ): Promise<UserRelatedTicketInfo[]> {
+        const orgUrl = this.orgUrl;
+        const project = this.project;
+        if (!orgUrl || !project) { return []; }
+
+        try {
+            const wiqlUrl = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.0&$top=50`;
+            const wiqlResp = await fetch(wiqlUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ query: wiql }),
+            });
+            if (!wiqlResp.ok) { return []; }
+
+            const wiqlData = await wiqlResp.json() as { workItems?: { id: number }[] };
+            const ids = wiqlData.workItems?.map((w) => w.id) ?? [];
+            if (ids.length === 0) { return []; }
+
+            const batchUrl = `${this.normalizeUrl(orgUrl)}/_apis/wit/workitems?ids=${ids.join(',')}&fields=System.Id,System.Title,System.WorkItemType,System.State,System.AssignedTo,System.ChangedDate,System.CreatedDate&api-version=7.0`;
+            const batchResp = await fetch(batchUrl, { headers: { Authorization: headers.Authorization } });
+            if (!batchResp.ok) { return []; }
+
+            const batchData = await batchResp.json() as { value?: { id: number; fields: Record<string, any> }[] };
+            return (batchData.value ?? []).map((wi) => ({
+                id: String(wi.id),
+                title: wi.fields['System.Title'] ?? '',
+                type: wi.fields['System.WorkItemType'] ?? '',
+                state: wi.fields['System.State'] ?? '',
+                assignedTo: wi.fields['System.AssignedTo']?.displayName,
+                url: this.getTicketUrl(String(wi.id)),
+                relation,
+                updatedAt: wi.fields['System.ChangedDate'],
+                createdAt: wi.fields['System.CreatedDate'],
+            }));
+        } catch {
+            return [];
+        }
+    }
+
+    private async getCurrentIdentityId(headers: Record<string, string>): Promise<string | undefined> {
+        const orgUrl = this.orgUrl;
+        if (!orgUrl) { return undefined; }
+
+        try {
+            const url = `${this.normalizeUrl(orgUrl)}/_apis/connectionData?connectOptions=IncludeServices&lastChangeId=-1&lastChangeId64=-1&api-version=7.0`;
+            const resp = await fetch(url, { headers });
+            if (!resp.ok) { return undefined; }
+            const data = await resp.json() as { authenticatedUser?: { id?: string } };
+            return data.authenticatedUser?.id;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private async queryMyPullRequests(
+        project: string,
+        identityId: string,
+        relation: 'reviewer' | 'authored',
+        headers: Record<string, string>,
+    ): Promise<UserRelatedPullRequestInfo[]> {
+        const orgUrl = this.orgUrl;
+        if (!orgUrl) { return []; }
+
+        try {
+            const criteria = relation === 'reviewer'
+                ? `searchCriteria.reviewerId=${encodeURIComponent(identityId)}`
+                : `searchCriteria.creatorId=${encodeURIComponent(identityId)}`;
+            const url = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/git/pullrequests?${criteria}&searchCriteria.status=all&$top=50&api-version=7.0`;
+            const resp = await fetch(url, { headers });
+            if (!resp.ok) { return []; }
+
+            const data = await resp.json() as {
+                value?: Array<{
+                    pullRequestId?: number;
+                    title?: string;
+                    status?: string;
+                    repository?: { name?: string };
+                    sourceRefName?: string;
+                    targetRefName?: string;
+                    creationDate?: string;
+                    closedDate?: string;
+                    createdBy?: { displayName?: string };
+                    reviewers?: Array<{ id?: string; vote?: number }>;
+                }>;
+            };
+
+            return (data.value ?? []).map((pr) => {
+                const prId = pr.pullRequestId ? String(pr.pullRequestId) : '';
+                const repoName = pr.repository?.name ?? '';
+                const webUrl = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${encodeURIComponent(prId)}`;
+
+                let actualRelation: string = relation;
+                if (relation === 'reviewer') {
+                    const myReview = pr.reviewers?.find((r) => r.id === identityId);
+                    if ((myReview?.vote ?? 0) >= 10) {
+                        actualRelation = 'approved';
+                    }
+                }
+
+                return {
+                    id: prId,
+                    title: pr.title ?? `PR #${prId}`,
+                    url: webUrl,
+                    status: pr.status ?? 'unknown',
+                    state: pr.status,
+                    sourceBranch: this.normalizeRefName(pr.sourceRefName),
+                    targetBranch: this.normalizeRefName(pr.targetRefName),
+                    relation: actualRelation,
+                    createdAt: pr.creationDate,
+                    updatedAt: pr.closedDate ?? pr.creationDate,
+                    author: pr.createdBy?.displayName,
+                } as UserRelatedPullRequestInfo;
+            });
+        } catch {
+            return [];
         }
     }
 }

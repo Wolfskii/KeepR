@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import {
     Bookmark,
     BookmarkLocation,
@@ -9,6 +10,13 @@ import {
     createEmptyState,
     generateId,
 } from './models';
+
+export interface BookmarkLineImpact {
+    bookmarkId: string;
+    reason: 'deleted';
+    filePath: string;
+    line: number;
+}
 
 /**
  * Manages bookmark persistence and in-memory state.
@@ -50,9 +58,12 @@ export class BookmarkStore {
     private async saveRepo(repo: RepoBookmarks): Promise<void> {
         const rootUri = vscode.Uri.parse(repo.rootUri);
         const fileUri = vscode.Uri.joinPath(rootUri, '.vscode', 'keepr.json');
+        const dirUri = vscode.Uri.joinPath(rootUri, '.vscode');
         const data: Omit<RepoBookmarks, 'rootUri'> & { rootUri?: string } = { ...repo };
         delete data.rootUri; // don't persist the absolute URI
         const content = Buffer.from(JSON.stringify(data, null, 2), 'utf-8');
+        // Ensure folder exists for first-time users/workspaces.
+        await vscode.workspace.fs.createDirectory(dirUri);
         await vscode.workspace.fs.writeFile(fileUri, content);
     }
 
@@ -79,8 +90,7 @@ export class BookmarkStore {
     }
 
     getRepoForFile(fileUri: vscode.Uri): RepoBookmarks | undefined {
-        const filePath = fileUri.toString();
-        return this.state.repos.find((r) => filePath.startsWith(r.rootUri));
+        return this.state.repos.find((r) => this.isFileInRepo(fileUri, r));
     }
 
     findBookmarkAtLine(fileUri: vscode.Uri, line: number): { repo: RepoBookmarks; bookmark: Bookmark } | undefined {
@@ -190,6 +200,53 @@ export class BookmarkStore {
         return true;
     }
 
+    async setBookmarkLineText(id: string, lineText: string | undefined): Promise<boolean> {
+        const found = this.findBookmarkById(id);
+        if (!found) { return false; }
+        const { repo, bookmark } = found;
+        bookmark.location.lineText = lineText;
+        bookmark.updatedAt = new Date().toISOString();
+        await this.saveRepo(repo);
+        this._onDidChange.fire();
+        return true;
+    }
+
+    detectLineImpacts(
+        fileUri: vscode.Uri,
+        changes: readonly vscode.TextDocumentContentChangeEvent[],
+    ): BookmarkLineImpact[] {
+        const repo = this.getRepoForFile(fileUri);
+        if (!repo) { return []; }
+
+        const relPath = this.toRelativePath(fileUri, repo);
+        const fileBookmarks = repo.bookmarks.filter((b) => b.location.filePath === relPath);
+        if (fileBookmarks.length === 0) { return []; }
+
+        const impacts = new Map<string, BookmarkLineImpact>();
+
+        for (const change of changes) {
+            const startLine = change.range.start.line;
+            const endLine = change.range.end.line;
+            const newLineCount = (change.text.match(/\n/g) || []).length;
+            const delta = newLineCount - (endLine - startLine);
+
+            if (delta >= 0) { continue; }
+
+            for (const bm of fileBookmarks) {
+                if (bm.location.line >= startLine && bm.location.line <= endLine) {
+                    impacts.set(bm.id, {
+                        bookmarkId: bm.id,
+                        reason: 'deleted',
+                        filePath: relPath,
+                        line: bm.location.line,
+                    });
+                }
+            }
+        }
+
+        return [...impacts.values()];
+    }
+
     async clearAll(): Promise<void> {
         for (const repo of this.state.repos) {
             repo.bookmarks = [];
@@ -237,7 +294,25 @@ export class BookmarkStore {
 
     toRelativePath(fileUri: vscode.Uri, repo: RepoBookmarks): string {
         const rootUri = vscode.Uri.parse(repo.rootUri);
+        if (rootUri.scheme === 'file' && fileUri.scheme === 'file') {
+            const rel = path.relative(rootUri.fsPath, fileUri.fsPath);
+            return rel.split(path.sep).join('/');
+        }
         return fileUri.toString().slice(rootUri.toString().length + 1);
+    }
+
+    private isFileInRepo(fileUri: vscode.Uri, repo: RepoBookmarks): boolean {
+        const rootUri = vscode.Uri.parse(repo.rootUri);
+
+        if (rootUri.scheme === 'file' && fileUri.scheme === 'file') {
+            const root = path.resolve(rootUri.fsPath).toLowerCase();
+            const file = path.resolve(fileUri.fsPath).toLowerCase();
+            const rel = path.relative(root, file);
+            return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+        }
+
+        const filePath = fileUri.toString();
+        return filePath.startsWith(repo.rootUri);
     }
 
     resolveUri(repo: RepoBookmarks, bookmark: Bookmark): vscode.Uri {

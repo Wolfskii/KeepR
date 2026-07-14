@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TicketProvider, TicketInfo, TicketDetails, ProviderId } from './types';
+import { TicketProvider, TicketInfo, TicketDetails, ProviderId, UserRelatedPullRequestInfo, UserRelatedTicketInfo } from './types';
 import { AzureDevOpsProvider } from './azureDevOps';
 import { GitHubProvider } from './github';
 import { JiraProvider } from './jira';
@@ -152,6 +152,52 @@ export class ProviderManager {
         return this.activeProvider?.searchTickets(query) ?? [];
     }
 
+    /** Tickets related to the logged-in user across all configured providers. */
+    async getMyTicketsAcrossProviders(): Promise<AggregatedMyTicket[]> {
+        const providers = this.getConfiguredProviders();
+        const all: AggregatedMyTicket[] = [];
+
+        for (const entry of providers) {
+            try {
+                const items = await entry.provider.getMyTickets();
+                for (const item of items) {
+                    all.push({
+                        providerId: entry.provider.id,
+                        providerLabel: entry.label,
+                        item,
+                    });
+                }
+            } catch {
+                // Ignore provider-specific failures to keep merged results usable.
+            }
+        }
+
+        return this.dedupeMyTickets(all);
+    }
+
+    /** Pull requests related to the logged-in user across all configured providers. */
+    async getMyPullRequestsAcrossProviders(): Promise<AggregatedMyPullRequest[]> {
+        const providers = this.getConfiguredProviders();
+        const all: AggregatedMyPullRequest[] = [];
+
+        for (const entry of providers) {
+            try {
+                const items = await entry.provider.getMyPullRequests();
+                for (const item of items) {
+                    all.push({
+                        providerId: entry.provider.id,
+                        providerLabel: entry.label,
+                        item,
+                    });
+                }
+            } catch {
+                // Ignore provider-specific failures to keep merged results usable.
+            }
+        }
+
+        return this.dedupeMyPullRequests(all);
+    }
+
     /** Get ticket details using the active provider */
     async getTicketDetails(ticketId: string): Promise<TicketDetails | undefined> {
         return this.activeProvider?.getTicketDetails(ticketId);
@@ -172,6 +218,66 @@ export class ProviderManager {
         this.activeProvider?.clearCache();
     }
 
+    private getConfiguredProviders(): Array<{ provider: TicketProvider; label: string }> {
+        const entries: Array<{ provider: TicketProvider; label: string }> = [];
+
+        if (this._connectionStore) {
+            const connections = this._connectionStore.getAll();
+            for (const conn of connections) {
+                try {
+                    const provider = this.createProviderFromConnection(conn);
+                    if (provider.isConfigured()) {
+                        entries.push({ provider, label: conn.name });
+                    }
+                } catch {
+                    // Skip invalid connection configs.
+                }
+            }
+            return entries;
+        }
+
+        const active = this.activeProvider;
+        if (active?.isConfigured()) {
+            entries.push({ provider: active, label: active.displayName });
+        }
+
+        return entries;
+    }
+
+    private dedupeMyTickets(items: AggregatedMyTicket[]): AggregatedMyTicket[] {
+        const map = new Map<string, AggregatedMyTicket>();
+        for (const item of items) {
+            const key = `${item.providerId}:${item.item.id}`;
+            const prev = map.get(key);
+            if (!prev) {
+                map.set(key, item);
+                continue;
+            }
+            // Merge relation info if duplicated from different provider-specific queries.
+            if (!prev.item.relation && item.item.relation) {
+                prev.item.relation = item.item.relation;
+            }
+        }
+        return [...map.values()];
+    }
+
+    private dedupeMyPullRequests(items: AggregatedMyPullRequest[]): AggregatedMyPullRequest[] {
+        const map = new Map<string, AggregatedMyPullRequest>();
+        for (const item of items) {
+            const stableId = item.item.id ?? item.item.url;
+            const key = `${item.providerId}:${stableId}`;
+            const prev = map.get(key);
+            if (!prev) {
+                map.set(key, item);
+                continue;
+            }
+            if (!prev.item.relation && item.item.relation) {
+                prev.item.relation = item.item.relation;
+            }
+        }
+        return [...map.values()];
+    }
+
     /** Listen for provider setting changes and fire event */
     watchConfigChanges(context: vscode.ExtensionContext): void {
         context.subscriptions.push(
@@ -189,4 +295,16 @@ export class ProviderManager {
     dispose(): void {
         this._onDidChangeProvider.dispose();
     }
+}
+
+export interface AggregatedMyTicket {
+    providerId: ProviderId;
+    providerLabel: string;
+    item: UserRelatedTicketInfo;
+}
+
+export interface AggregatedMyPullRequest {
+    providerId: ProviderId;
+    providerLabel: string;
+    item: UserRelatedPullRequestInfo;
 }
