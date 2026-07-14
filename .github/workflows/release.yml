@@ -89,9 +89,11 @@ jobs:
       - name: Bump version in package.json
         run: npm version ${{ steps.newver.outputs.version }} --no-git-tag-version
 
-      - name: Update README marketplace badge cache-buster
+      - name: Update README version badge from release version
+        env:
+          VERSION: ${{ steps.newver.outputs.version }}
         run: |
-          sed -i -E 's#(https://vsmarketplacebadges.dev/version-short/wolfskii\.keepr\.svg)(\?[^"<>]*)?#\1?v=${{ steps.newver.outputs.version }}#g' README.md
+          node -e "const fs=require('fs');const v=process.env.VERSION;const badge='https://img.shields.io/badge/VS%20Code%20Marketplace-v'+v+'-007ACC?logo=visualstudiocode&logoColor=white';const re=/https:\/\/(?:vsmarketplacebadges\.dev\/version-short\/wolfskii\.keepr\.svg(?:\?[^\"<>]*)?|img\.shields\.io\/badge\/VS%20Code%20Marketplace-[^\"<>]+)/g;const p='README.md';let s=fs.readFileSync(p,'utf8');s=s.replace(re,badge);fs.writeFileSync(p,s);"
 
       - name: Commit version bump
         run: |
