@@ -51,11 +51,15 @@ jobs:
       - name: Set version in package.json
         run: npm version ${{ steps.version.outputs.next }} --no-git-tag-version --allow-same-version
 
+      - name: Update README marketplace badge cache-buster
+        run: |
+          sed -i -E 's#(https://vsmarketplacebadges.dev/version-short/wolfskii\.keepr\.svg)(\?[^"<>]*)?#\1?v=${{ steps.version.outputs.next }}#g' README.md
+
       - name: Commit and push version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json README.md
           git commit -m "chore: bump version to ${{ steps.version.outputs.next }}" || echo "No changes to commit"
           git push
 

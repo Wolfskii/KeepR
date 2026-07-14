@@ -89,9 +89,13 @@ jobs:
       - name: Bump version in package.json
         run: npm version ${{ steps.newver.outputs.version }} --no-git-tag-version
 
+      - name: Update README marketplace badge cache-buster
+        run: |
+          sed -i -E 's#(https://vsmarketplacebadges.dev/version-short/wolfskii\.keepr\.svg)(\?[^"<>]*)?#\1?v=${{ steps.newver.outputs.version }}#g' README.md
+
       - name: Commit version bump
         run: |
-          git add package.json package-lock.json
+          git add package.json package-lock.json README.md
           git commit -m "release: v${{ steps.newver.outputs.version }}"
 
       - name: Merge branch into develop
