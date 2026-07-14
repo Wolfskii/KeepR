@@ -7,6 +7,7 @@ import { AggregatedMyPullRequest, AggregatedMyTicket } from './providers/provide
 
 type GroupBy = 'repo' | 'file' | 'status' | 'ticket';
 type MyItemsSort = 'updated' | 'created' | 'title' | 'provider';
+export type TreeMode = 'bookmarks' | 'tickets' | 'prs';
 
 /** Union of all node types in the tree */
 type TreeNode = RepoNode | FileNode | GroupNode | BookmarkNode | MyTicketsSectionNode | MyPrsSectionNode | MyTicketNode | MyPrNode;
@@ -83,6 +84,7 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   constructor(
     private readonly store: BookmarkStore,
     private readonly providers?: ProviderManager,
+    private readonly mode: TreeMode = 'bookmarks',
   ) {
     const config = vscode.workspace.getConfiguration('keepr');
     this.groupBy = config.get<GroupBy>('defaultGroupBy', 'repo');
@@ -158,6 +160,14 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (!element) {
+      if (this.mode === 'tickets') {
+        await this.ensureMyItemsLoaded();
+        return this.getFilteredSortedMyTickets().map((item) => new MyTicketNode(item));
+      }
+      if (this.mode === 'prs') {
+        await this.ensureMyItemsLoaded();
+        return this.getFilteredSortedMyPrs().map((item) => new MyPrNode(item));
+      }
       return this.getRoots();
     }
 
@@ -185,6 +195,10 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   // ── Root nodes ───────────────────────────────────────
 
   private getRoots(): TreeNode[] {
+    if (this.mode !== 'bookmarks') {
+      return [];
+    }
+
     const state = this.store.getState();
     const roots: TreeNode[] = [];
 
@@ -195,10 +209,6 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       roots.push(...state.repos.map(
         (r) => new RepoNode(r, this.collapsedRepos.get(r.repoName) ?? false),
       ));
-    }
-
-    if (this.isMyItemsEnabled()) {
-      roots.push(new MyTicketsSectionNode(), new MyPrsSectionNode());
     }
 
     return roots;
@@ -334,11 +344,12 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   private myTicketTreeItem(node: MyTicketNode): vscode.TreeItem {
     const it = node.item;
-    const item = new vscode.TreeItem(`#${it.item.id} — ${it.item.title}`, vscode.TreeItemCollapsibleState.None);
+    const glyph = this.myTicketTypeGlyph(it.item.type);
+    const item = new vscode.TreeItem(`${glyph} #${it.item.id} — ${it.item.title}`, vscode.TreeItemCollapsibleState.None);
     const descParts = [it.providerLabel, it.item.type, it.item.state];
     if (it.item.relation) { descParts.push(it.item.relation); }
     item.description = descParts.filter(Boolean).join(' · ');
-    item.iconPath = new vscode.ThemeIcon('issue-opened');
+    item.iconPath = this.myTicketTypeIcon(it.item.type);
     item.contextValue = 'myTicket';
 
     if (it.item.url) {
@@ -357,6 +368,26 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     if (it.item.updatedAt) { md.appendMarkdown(`Updated: ${it.item.updatedAt}\n\n`); }
     item.tooltip = md;
     return item;
+  }
+
+  private myTicketTypeGlyph(type: string | undefined): string {
+    const value = (type ?? '').toLowerCase();
+    if (value.includes('bug')) { return '🐞'; }
+    if (value.includes('task')) { return '✅'; }
+    if (value.includes('feature') || value.includes('epic') || value.includes('story') || value.includes('pbi') || value.includes('product backlog')) {
+      return '⭐';
+    }
+    return '📌';
+  }
+
+  private myTicketTypeIcon(type: string | undefined): vscode.ThemeIcon {
+    const value = (type ?? '').toLowerCase();
+    if (value.includes('bug')) { return new vscode.ThemeIcon('bug'); }
+    if (value.includes('task')) { return new vscode.ThemeIcon('checklist'); }
+    if (value.includes('feature') || value.includes('epic') || value.includes('story') || value.includes('pbi') || value.includes('product backlog')) {
+      return new vscode.ThemeIcon('rocket');
+    }
+    return new vscode.ThemeIcon('issues');
   }
 
   private myPrTreeItem(node: MyPrNode): vscode.TreeItem {

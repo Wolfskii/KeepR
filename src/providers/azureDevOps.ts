@@ -6,6 +6,13 @@ export interface AzureDevOpsConfig {
     project: string;
 }
 
+interface AzureIdentity {
+    id?: string;
+    descriptor?: string;
+    uniqueName?: string;
+    displayName?: string;
+}
+
 export class AzureDevOpsProvider implements TicketProvider {
     readonly id = 'azureDevOps' as const;
     readonly displayName = 'Azure DevOps';
@@ -166,14 +173,25 @@ export class AzureDevOpsProvider implements TicketProvider {
             'Authorization': `Basic ${Buffer.from(':' + pat).toString('base64')}`,
         };
 
-        const identityId = await this.getCurrentIdentityId(headers);
-        if (!identityId) { return []; }
+        const identity = await this.getCurrentIdentity(headers);
+        if (!identity.id && !identity.descriptor && !identity.uniqueName && !identity.displayName) {
+            return [];
+        }
 
-        const reviewed = await this.queryMyPullRequests(project, identityId, 'reviewer', headers);
-        const authored = await this.queryMyPullRequests(project, identityId, 'authored', headers);
+        const collected: UserRelatedPullRequestInfo[] = [];
+
+        if (identity.id) {
+            const reviewed = await this.queryMyPullRequests(project, identity.id, 'reviewer', headers);
+            const authored = await this.queryMyPullRequests(project, identity.id, 'authored', headers);
+            collected.push(...reviewed, ...authored);
+        }
+
+        // Fallback path for cases where reviewer/creator identity filters miss active PRs.
+        const fallback = await this.queryActivePullRequestsAcrossRepos(project, identity, headers);
+        collected.push(...fallback);
 
         const map = new Map<string, UserRelatedPullRequestInfo>();
-        for (const item of [...reviewed, ...authored]) {
+        for (const item of collected) {
             const key = item.id ?? item.url;
             const prev = map.get(key);
             if (!prev) {
@@ -181,7 +199,17 @@ export class AzureDevOpsProvider implements TicketProvider {
                 continue;
             }
             if (prev.relation && item.relation && prev.relation !== item.relation) {
-                prev.relation = 'reviewer+authored';
+                const merged = new Set<string>(`${prev.relation}+${item.relation}`.split('+').filter(Boolean));
+                if (merged.has('reviewer') && merged.has('authored')) {
+                    prev.relation = 'reviewer+authored';
+                } else if (merged.has('approved') && merged.has('authored')) {
+                    prev.relation = 'reviewer+authored';
+                } else if (merged.has('approved')) {
+                    prev.relation = 'approved';
+                }
+            }
+            if (!prev.relation && item.relation) {
+                prev.relation = item.relation;
             }
         }
 
@@ -529,19 +557,130 @@ export class AzureDevOpsProvider implements TicketProvider {
         }
     }
 
-    private async getCurrentIdentityId(headers: Record<string, string>): Promise<string | undefined> {
+    private async getCurrentIdentity(headers: Record<string, string>): Promise<AzureIdentity> {
         const orgUrl = this.orgUrl;
-        if (!orgUrl) { return undefined; }
+        if (!orgUrl) { return {}; }
 
         try {
             const url = `${this.normalizeUrl(orgUrl)}/_apis/connectionData?connectOptions=IncludeServices&lastChangeId=-1&lastChangeId64=-1&api-version=7.0`;
             const resp = await fetch(url, { headers });
-            if (!resp.ok) { return undefined; }
-            const data = await resp.json() as { authenticatedUser?: { id?: string } };
-            return data.authenticatedUser?.id;
+            if (!resp.ok) { return {}; }
+            const data = await resp.json() as {
+                authenticatedUser?: { id?: string; descriptor?: string; uniqueName?: string; providerDisplayName?: string; customDisplayName?: string };
+                authorizedUser?: { id?: string; descriptor?: string; uniqueName?: string; providerDisplayName?: string; customDisplayName?: string };
+            };
+            const user = data.authenticatedUser ?? data.authorizedUser;
+            if (!user) { return {}; }
+            return {
+                id: user.id,
+                descriptor: user.descriptor,
+                uniqueName: user.uniqueName,
+                displayName: user.providerDisplayName ?? user.customDisplayName,
+            };
         } catch {
-            return undefined;
+            return {};
         }
+    }
+
+    private async queryActivePullRequestsAcrossRepos(
+        project: string,
+        identity: AzureIdentity,
+        headers: Record<string, string>,
+    ): Promise<UserRelatedPullRequestInfo[]> {
+        const orgUrl = this.orgUrl;
+        if (!orgUrl) { return []; }
+
+        try {
+            const base = this.normalizeUrl(orgUrl);
+            const reposUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories?api-version=7.0`;
+            const reposResp = await fetch(reposUrl, { headers });
+            if (!reposResp.ok) { return []; }
+
+            const reposData = await reposResp.json() as {
+                value?: Array<{ id?: string; name?: string }>;
+            };
+
+            const results: UserRelatedPullRequestInfo[] = [];
+
+            for (const repo of reposData.value ?? []) {
+                const repoId = repo.id;
+                if (!repoId) { continue; }
+
+                const prsUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/pullrequests?searchCriteria.status=active&$top=200&api-version=7.0`;
+                const prsResp = await fetch(prsUrl, { headers });
+                if (!prsResp.ok) { continue; }
+
+                const prsData = await prsResp.json() as {
+                    value?: Array<{
+                        pullRequestId?: number;
+                        title?: string;
+                        status?: string;
+                        repository?: { name?: string };
+                        sourceRefName?: string;
+                        targetRefName?: string;
+                        creationDate?: string;
+                        closedDate?: string;
+                        createdBy?: { id?: string; uniqueName?: string; displayName?: string };
+                        reviewers?: Array<{ id?: string; uniqueName?: string; displayName?: string; vote?: number }>;
+                    }>;
+                };
+
+                for (const pr of prsData.value ?? []) {
+                    const isAuthor = this.matchesIdentity(pr.createdBy, identity);
+                    const myReview = pr.reviewers?.find((r) => this.matchesIdentity(r, identity));
+                    const isReviewer = !!myReview;
+                    if (!isAuthor && !isReviewer) { continue; }
+
+                    const prId = pr.pullRequestId ? String(pr.pullRequestId) : '';
+                    const repoName = pr.repository?.name ?? repo.name ?? '';
+                    const webUrl = `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${encodeURIComponent(prId)}`;
+
+                    let relation = isAuthor && isReviewer ? 'reviewer+authored' : (isAuthor ? 'authored' : 'reviewer');
+                    if (!isAuthor && (myReview?.vote ?? 0) >= 10) {
+                        relation = 'approved';
+                    }
+
+                    results.push({
+                        id: prId,
+                        title: pr.title ?? `PR #${prId}`,
+                        url: webUrl,
+                        status: pr.status ?? 'unknown',
+                        state: pr.status,
+                        sourceBranch: this.normalizeRefName(pr.sourceRefName),
+                        targetBranch: this.normalizeRefName(pr.targetRefName),
+                        relation,
+                        createdAt: pr.creationDate,
+                        updatedAt: pr.closedDate ?? pr.creationDate,
+                        author: pr.createdBy?.displayName,
+                    });
+                }
+            }
+
+            return results;
+        } catch {
+            return [];
+        }
+    }
+
+    private matchesIdentity(
+        actor: { id?: string; uniqueName?: string; displayName?: string } | undefined,
+        identity: AzureIdentity,
+    ): boolean {
+        if (!actor) { return false; }
+        const actorId = (actor.id ?? '').toLowerCase();
+        const actorUnique = (actor.uniqueName ?? '').toLowerCase();
+        const actorDisplay = (actor.displayName ?? '').toLowerCase();
+
+        const identityIds = [identity.id, identity.descriptor].filter(Boolean).map((v) => String(v).toLowerCase());
+        const identityUnique = (identity.uniqueName ?? '').toLowerCase();
+        const identityDisplay = (identity.displayName ?? '').toLowerCase();
+
+        if (actorId && identityIds.includes(actorId)) { return true; }
+        if (actorUnique && identityIds.includes(actorUnique)) { return true; }
+        if (identityUnique && (actorUnique === identityUnique || actorId === identityUnique)) { return true; }
+        if (identityDisplay && actorDisplay && actorDisplay === identityDisplay) { return true; }
+
+        return false;
     }
 
     private async queryMyPullRequests(

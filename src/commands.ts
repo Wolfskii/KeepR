@@ -16,8 +16,16 @@ export function registerCommands(
     decorations: DecorationManager,
     treeView: vscode.TreeView<any>,
     providers: ProviderManager,
+    myItemsTreeProviders: BookmarkTreeProvider[] = [],
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
+
+    const refreshMyItemsViews = (): void => {
+        treeProvider.refreshMyItems();
+        for (const provider of myItemsTreeProviders) {
+            provider.refreshMyItems();
+        }
+    };
 
     function getStatusLabels(): string[] {
         const config = vscode.workspace.getConfiguration('keepr');
@@ -393,7 +401,7 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.refreshMyItems', () => {
-            treeProvider.refreshMyItems();
+            refreshMyItemsViews();
             vscode.window.showInformationMessage('KeepR: My Tickets/PRs refreshed.');
         }),
     );
@@ -411,7 +419,7 @@ export function registerCommands(
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Tickets filter' });
             if (!pick) { return; }
             await vscode.workspace.getConfiguration('keepr').update('myItems.ticketFilter', pick.value, vscode.ConfigurationTarget.Global);
-            treeProvider.refreshMyItems();
+            refreshMyItemsViews();
         }),
     );
 
@@ -429,7 +437,7 @@ export function registerCommands(
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Pull Requests filter' });
             if (!pick) { return; }
             await vscode.workspace.getConfiguration('keepr').update('myItems.prFilter', pick.value, vscode.ConfigurationTarget.Global);
-            treeProvider.refreshMyItems();
+            refreshMyItemsViews();
         }),
     );
 
@@ -444,7 +452,7 @@ export function registerCommands(
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Items sort order' });
             if (!pick) { return; }
             await vscode.workspace.getConfiguration('keepr').update('myItems.sortBy', pick.value, vscode.ConfigurationTarget.Global);
-            treeProvider.refreshMyItems();
+            refreshMyItemsViews();
         }),
     );
 

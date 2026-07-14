@@ -185,6 +185,18 @@
                     "contextualTitle": "KeepR"
                 },
                 {
+                    "id": "keepr.myTicketsView",
+                    "name": "My Tickets/PBIs/Features",
+                    "icon": "$(issues)",
+                    "contextualTitle": "KeepR"
+                },
+                {
+                    "id": "keepr.myPullRequestsView",
+                    "name": "My Pull Requests",
+                    "icon": "$(git-pull-request)",
+                    "contextualTitle": "KeepR"
+                },
+                {
                     "id": "keepr.providersView",
                     "name": "Providers",
                     "icon": "$(plug)",
@@ -226,22 +238,22 @@
                 },
                 {
                     "command": "keepr.refreshMyItems",
-                    "when": "view == keepr.bookmarksView",
+                    "when": "view == keepr.bookmarksView || view == keepr.myTicketsView || view == keepr.myPullRequestsView",
                     "group": "navigation@7"
                 },
                 {
                     "command": "keepr.setMyItemsTicketFilter",
-                    "when": "view == keepr.bookmarksView",
+                    "when": "view == keepr.bookmarksView || view == keepr.myTicketsView",
                     "group": "navigation@8"
                 },
                 {
                     "command": "keepr.setMyItemsPrFilter",
-                    "when": "view == keepr.bookmarksView",
+                    "when": "view == keepr.bookmarksView || view == keepr.myPullRequestsView",
                     "group": "navigation@9"
                 },
                 {
                     "command": "keepr.setMyItemsSort",
-                    "when": "view == keepr.bookmarksView",
+                    "when": "view == keepr.bookmarksView || view == keepr.myTicketsView || view == keepr.myPullRequestsView",
                     "group": "navigation@10"
                 },
                 {

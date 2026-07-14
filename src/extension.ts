@@ -10,6 +10,8 @@ import { BookmarkCodeLensProvider } from './codeLensProvider';
 
 let store: BookmarkStore;
 let treeProvider: BookmarkTreeProvider;
+let myTicketsTreeProvider: BookmarkTreeProvider;
+let myPrsTreeProvider: BookmarkTreeProvider;
 let decorations: DecorationManager;
 let codeLensProvider: BookmarkCodeLensProvider;
 
@@ -38,15 +40,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     connectionStore.onDidChange(() => providerTree.refresh());
 
     // Bookmarks tree view
-    treeProvider = new BookmarkTreeProvider(store, providers);
+    treeProvider = new BookmarkTreeProvider(store, providers, 'bookmarks');
     const treeView = vscode.window.createTreeView('keepr.bookmarksView', {
         treeDataProvider: treeProvider,
         showCollapseAll: true,
     });
 
+    myTicketsTreeProvider = new BookmarkTreeProvider(store, providers, 'tickets');
+    const myTicketsTreeView = vscode.window.createTreeView('keepr.myTicketsView', {
+        treeDataProvider: myTicketsTreeProvider,
+    });
+
+    myPrsTreeProvider = new BookmarkTreeProvider(store, providers, 'prs');
+    const myPrsTreeView = vscode.window.createTreeView('keepr.myPullRequestsView', {
+        treeDataProvider: myPrsTreeProvider,
+    });
+
     // Refresh tree when provider changes
     providers.onDidChangeProvider(() => {
         treeProvider.refreshWorkItems();
+        myTicketsTreeProvider.refreshWorkItems();
+        myPrsTreeProvider.refreshWorkItems();
     });
 
     // Editor decorations
@@ -57,13 +71,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const codeLensRegistration = vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLensProvider);
 
     // Register all commands
-    const commandDisposables = registerCommands(context, store, treeProvider, decorations, treeView, providers);
+    const commandDisposables = registerCommands(
+        context,
+        store,
+        treeProvider,
+        decorations,
+        treeView,
+        providers,
+        [myTicketsTreeProvider, myPrsTreeProvider],
+    );
 
     // Register Language Model Tools (Copilot Chat / MCP integration)
     registerTools(context, store, decorations, providers);
 
     // Refresh tree when store changes
-    store.onDidChange(() => treeProvider.refresh());
+    store.onDidChange(() => {
+        treeProvider.refresh();
+        myTicketsTreeProvider.refresh();
+        myPrsTreeProvider.refresh();
+    });
 
     // Track line changes for bookmark drift correction
     context.subscriptions.push(
@@ -101,7 +127,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showOnboardingIfNeeded(context, providers);
 
     // Push disposables
-    context.subscriptions.push(treeView, providerTreeView, store, treeProvider, decorations, codeLensProvider, codeLensRegistration, providers, connectionStore, providerTree, ...commandDisposables);
+    context.subscriptions.push(
+        treeView,
+        myTicketsTreeView,
+        myPrsTreeView,
+        providerTreeView,
+        store,
+        treeProvider,
+        myTicketsTreeProvider,
+        myPrsTreeProvider,
+        decorations,
+        codeLensProvider,
+        codeLensRegistration,
+        providers,
+        connectionStore,
+        providerTree,
+        ...commandDisposables,
+    );
 }
 
 export function deactivate(): void {

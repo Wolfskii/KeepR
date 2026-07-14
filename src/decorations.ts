@@ -150,7 +150,7 @@ export class DecorationManager {
     const removeUri = vscode.Uri.parse(
       `command:keepr.removeBookmarkById?${encodeURIComponent(JSON.stringify([bm.id]))}`,
     );
-    md.appendMarkdown(`\n\n[Show in KeepR panel](${cmdUri}) · [$(check) Resolve](${resolveUri}) · [$(trash) Remove](${removeUri})`);
+    md.appendMarkdown(`\n\n[Show in KeepR panel](${cmdUri}) · [Resolve](${resolveUri}) · [Remove](${removeUri})`);
 
     return md;
   }
