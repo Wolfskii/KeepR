@@ -102,6 +102,8 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myTicketsCache: AggregatedMyTicket[] | undefined;
   private myPrsCache: AggregatedMyPullRequest[] | undefined;
   private loadingMyItems = false;
+  private refreshingMyItems = false;
+  private myItemsFetchedAt = 0;
   private expandedMyTickets = new Set<string>();
   private expandedMyPrs = new Set<string>();
   private expandedDescriptions = new Set<string>();
@@ -112,6 +114,7 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myPrDetailsFetching = new Set<string>();
 
   private static DETAIL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private static MY_ITEMS_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
   constructor(
     private readonly store: BookmarkStore,
@@ -430,7 +433,11 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myTicketsSectionTreeItem(): vscode.TreeItem {
     const count = this.getFilteredSortedMyTickets().length;
     const item = new vscode.TreeItem(
-      this.loadingMyItems ? 'My Tickets/PBIs/Features (loading...)' : `My Tickets/PBIs/Features (${count})`,
+      this.loadingMyItems
+        ? 'My Tickets/PBIs/Features (loading...)'
+        : this.refreshingMyItems
+          ? `My Tickets/PBIs/Features (${count}, updating...)`
+          : `My Tickets/PBIs/Features (${count})`,
       vscode.TreeItemCollapsibleState.Collapsed,
     );
     item.iconPath = new vscode.ThemeIcon('issues');
@@ -441,7 +448,11 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private myPrsSectionTreeItem(): vscode.TreeItem {
     const count = this.getFilteredSortedMyPrs().length;
     const item = new vscode.TreeItem(
-      this.loadingMyItems ? 'My Pull Requests (loading...)' : `My Pull Requests (${count})`,
+      this.loadingMyItems
+        ? 'My Pull Requests (loading...)'
+        : this.refreshingMyItems
+          ? `My Pull Requests (${count}, updating...)`
+          : `My Pull Requests (${count})`,
       vscode.TreeItemCollapsibleState.Collapsed,
     );
     item.iconPath = new vscode.ThemeIcon('git-pull-request');
@@ -929,6 +940,8 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   refreshMyItems(): void {
     this.myTicketsCache = undefined;
     this.myPrsCache = undefined;
+    this.myItemsFetchedAt = 0;
+    this.refreshingMyItems = false;
     this.refresh();
   }
 
@@ -954,10 +967,16 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   private async ensureMyItemsLoaded(): Promise<void> {
     if (this.loadingMyItems) { return; }
-    if (this.myTicketsCache && this.myPrsCache) { return; }
+    if (this.myTicketsCache && this.myPrsCache) {
+      if (this.isMyItemsCacheStale()) {
+        this.refreshMyItemsInBackground();
+      }
+      return;
+    }
     if (!this.providers) {
       this.myTicketsCache = [];
       this.myPrsCache = [];
+      this.myItemsFetchedAt = Date.now();
       return;
     }
 
@@ -969,10 +988,37 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       ]);
       this.myTicketsCache = tickets;
       this.myPrsCache = prs;
+      this.myItemsFetchedAt = Date.now();
     } finally {
       this.loadingMyItems = false;
       this._onDidChangeTreeData.fire(undefined);
     }
+  }
+
+  private isMyItemsCacheStale(): boolean {
+    if (!this.myItemsFetchedAt) { return true; }
+    return (Date.now() - this.myItemsFetchedAt) > BookmarkTreeProvider.MY_ITEMS_CACHE_TTL;
+  }
+
+  private refreshMyItemsInBackground(): void {
+    if (this.loadingMyItems || this.refreshingMyItems || !this.providers) { return; }
+
+    this.refreshingMyItems = true;
+    this._onDidChangeTreeData.fire(undefined);
+
+    Promise.all([
+      this.providers.getMyTicketsAcrossProviders(),
+      this.providers.getMyPullRequestsAcrossProviders(),
+    ]).then(([tickets, prs]) => {
+      this.myTicketsCache = tickets;
+      this.myPrsCache = prs;
+      this.myItemsFetchedAt = Date.now();
+    }).catch(() => {
+      // Keep stale cache data if refresh fails.
+    }).finally(() => {
+      this.refreshingMyItems = false;
+      this._onDidChangeTreeData.fire(undefined);
+    });
   }
 
   private getFilteredSortedMyTickets(): AggregatedMyTicket[] {

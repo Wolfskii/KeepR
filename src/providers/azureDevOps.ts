@@ -201,8 +201,8 @@ export class AzureDevOpsProvider implements TicketProvider {
             collected.push(...reviewed, ...authored);
         }
 
-        // Fallback path for cases where reviewer/creator identity filters miss active PRs.
-        const fallback = await this.queryActivePullRequestsAcrossRepos(project, identity, fallbackDisplayNames, headers);
+        // Fallback path for cases where reviewer/creator identity filters miss PRs.
+        const fallback = await this.queryPullRequestsAcrossRepos(project, identity, fallbackDisplayNames, headers);
         collected.push(...fallback);
 
         const map = new Map<string, UserRelatedPullRequestInfo>();
@@ -618,7 +618,7 @@ export class AzureDevOpsProvider implements TicketProvider {
         }
     }
 
-    private async queryActivePullRequestsAcrossRepos(
+    private async queryPullRequestsAcrossRepos(
         project: string,
         identity: AzureIdentity,
         fallbackDisplayNames: string[],
@@ -642,60 +642,64 @@ export class AzureDevOpsProvider implements TicketProvider {
 
             const results: UserRelatedPullRequestInfo[] = [];
 
+            const statuses = ['active', 'completed', 'abandoned'];
+
             for (const repo of reposData.value ?? []) {
                 const repoId = repo.id;
                 if (!repoId) { continue; }
 
-                const prsUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/pullrequests?searchCriteria.status=active&$top=200&api-version=7.0`;
-                const prsResp = await fetch(prsUrl, { headers });
-                if (prsResp.status === 401 || prsResp.status === 403) {
-                    this.warnPullRequestAccessIssue();
-                }
-                if (!prsResp.ok) { continue; }
-
-                const prsData = await prsResp.json() as {
-                    value?: Array<{
-                        pullRequestId?: number;
-                        title?: string;
-                        status?: string;
-                        repository?: { name?: string };
-                        sourceRefName?: string;
-                        targetRefName?: string;
-                        creationDate?: string;
-                        closedDate?: string;
-                        createdBy?: AzureActor;
-                        reviewers?: Array<AzureActor & { vote?: number }>;
-                    }>;
-                };
-
-                for (const pr of prsData.value ?? []) {
-                    const isAuthor = this.matchesIdentity(pr.createdBy, identity, fallbackDisplayNames);
-                    const myReview = pr.reviewers?.find((r) => this.matchesIdentity(r, identity, fallbackDisplayNames));
-                    const isReviewer = !!myReview;
-                    if (!isAuthor && !isReviewer) { continue; }
-
-                    const prId = pr.pullRequestId ? String(pr.pullRequestId) : '';
-                    const repoName = pr.repository?.name ?? repo.name ?? '';
-                    const webUrl = `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${encodeURIComponent(prId)}`;
-
-                    let relation = isAuthor && isReviewer ? 'reviewer+authored' : (isAuthor ? 'authored' : 'reviewer');
-                    if (!isAuthor && (myReview?.vote ?? 0) >= 10) {
-                        relation = 'approved';
+                for (const status of statuses) {
+                    const prsUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/pullrequests?searchCriteria.status=${encodeURIComponent(status)}&$top=200&api-version=7.0`;
+                    const prsResp = await fetch(prsUrl, { headers });
+                    if (prsResp.status === 401 || prsResp.status === 403) {
+                        this.warnPullRequestAccessIssue();
                     }
+                    if (!prsResp.ok) { continue; }
 
-                    results.push({
-                        id: prId,
-                        title: pr.title ?? `PR #${prId}`,
-                        url: webUrl,
-                        status: pr.status ?? 'unknown',
-                        state: pr.status,
-                        sourceBranch: this.normalizeRefName(pr.sourceRefName),
-                        targetBranch: this.normalizeRefName(pr.targetRefName),
-                        relation,
-                        createdAt: pr.creationDate,
-                        updatedAt: pr.closedDate ?? pr.creationDate,
-                        author: pr.createdBy?.displayName,
-                    });
+                    const prsData = await prsResp.json() as {
+                        value?: Array<{
+                            pullRequestId?: number;
+                            title?: string;
+                            status?: string;
+                            repository?: { name?: string };
+                            sourceRefName?: string;
+                            targetRefName?: string;
+                            creationDate?: string;
+                            closedDate?: string;
+                            createdBy?: AzureActor;
+                            reviewers?: Array<AzureActor & { vote?: number }>;
+                        }>;
+                    };
+
+                    for (const pr of prsData.value ?? []) {
+                        const isAuthor = this.matchesIdentity(pr.createdBy, identity, fallbackDisplayNames);
+                        const myReview = pr.reviewers?.find((r) => this.matchesIdentity(r, identity, fallbackDisplayNames));
+                        const isReviewer = !!myReview;
+                        if (!isAuthor && !isReviewer) { continue; }
+
+                        const prId = pr.pullRequestId ? String(pr.pullRequestId) : '';
+                        const repoName = pr.repository?.name ?? repo.name ?? '';
+                        const webUrl = `${base}/${encodeURIComponent(project)}/_git/${encodeURIComponent(repoName)}/pullrequest/${encodeURIComponent(prId)}`;
+
+                        let relation = isAuthor && isReviewer ? 'reviewer+authored' : (isAuthor ? 'authored' : 'reviewer');
+                        if (!isAuthor && (myReview?.vote ?? 0) >= 10) {
+                            relation = 'approved';
+                        }
+
+                        results.push({
+                            id: prId,
+                            title: pr.title ?? `PR #${prId}`,
+                            url: webUrl,
+                            status: pr.status ?? status,
+                            state: pr.status ?? status,
+                            sourceBranch: this.normalizeRefName(pr.sourceRefName),
+                            targetBranch: this.normalizeRefName(pr.targetRefName),
+                            relation,
+                            createdAt: pr.creationDate,
+                            updatedAt: pr.closedDate ?? pr.creationDate,
+                            author: pr.createdBy?.displayName,
+                        });
+                    }
                 }
             }
 
@@ -796,7 +800,7 @@ export class AzureDevOpsProvider implements TicketProvider {
             const criteria = relation === 'reviewer'
                 ? `searchCriteria.reviewerId=${encodeURIComponent(identityId)}`
                 : `searchCriteria.creatorId=${encodeURIComponent(identityId)}`;
-            const url = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/git/pullrequests?${criteria}&searchCriteria.status=all&$top=50&api-version=7.0`;
+            const url = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/git/pullrequests?${criteria}&searchCriteria.status=all&$top=200&api-version=7.0`;
             const resp = await fetch(url, { headers });
             if (resp.status === 401 || resp.status === 403) {
                 this.warnPullRequestAccessIssue();
