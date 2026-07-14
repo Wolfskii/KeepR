@@ -137,9 +137,19 @@
                 "icon": "$(filter)"
             },
             {
+                "command": "keepr.setMyItemsTicketStates",
+                "title": "KeepR: Set Visible Ticket States",
+                "icon": "$(checklist)"
+            },
+            {
                 "command": "keepr.setMyItemsPrFilter",
                 "title": "KeepR: Set My PRs Filter",
                 "icon": "$(filter)"
+            },
+            {
+                "command": "keepr.setMyItemsPrStates",
+                "title": "KeepR: Set Visible PR States",
+                "icon": "$(checklist)"
             },
             {
                 "command": "keepr.setMyItemsSort",
@@ -247,9 +257,19 @@
                     "group": "navigation@8"
                 },
                 {
+                    "command": "keepr.setMyItemsTicketStates",
+                    "when": "view == keepr.bookmarksView || view == keepr.myTicketsView",
+                    "group": "navigation@8.1"
+                },
+                {
                     "command": "keepr.setMyItemsPrFilter",
                     "when": "view == keepr.bookmarksView || view == keepr.myPullRequestsView",
                     "group": "navigation@9"
+                },
+                {
+                    "command": "keepr.setMyItemsPrStates",
+                    "when": "view == keepr.bookmarksView || view == keepr.myPullRequestsView",
+                    "group": "navigation@9.1"
                 },
                 {
                     "command": "keepr.setMyItemsSort",
@@ -653,7 +673,7 @@
                 "keepr.myItems.enabled": {
                     "type": "boolean",
                     "default": true,
-                    "description": "Show My Tickets/PBIs/Features and My Pull Requests sections in the Bookmarks view"
+                    "description": "Show My Tickets/PBIs/Features and My Pull Requests views in the KeepR sidebar"
                 },
                 "keepr.myItems.ticketFilter": {
                     "type": "string",
@@ -668,9 +688,17 @@
                     ],
                     "description": "Filter for My Tickets/PBIs/Features section"
                 },
+                "keepr.myItems.ticketVisibleStates": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Visible ticket states. Empty uses the default active-only behavior and hides completed states such as Done/Closed/Resolved/Removed."
+                },
                 "keepr.myItems.prFilter": {
                     "type": "string",
-                    "default": "all",
+                    "default": "authored",
                     "enum": [
                         "all",
                         "authored",
@@ -682,6 +710,14 @@
                     ],
                     "description": "Filter for My Pull Requests section"
                 },
+                "keepr.myItems.prVisibleStates": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Visible pull request states. Empty uses the default active-only behavior and hides completed states such as completed/abandoned."
+                },
                 "keepr.myItems.sortBy": {
                     "type": "string",
                     "default": "updated",
@@ -689,7 +725,9 @@
                         "updated",
                         "created",
                         "title",
-                        "provider"
+                        "provider",
+                        "type",
+                        "status"
                     ],
                     "description": "Sort order for My Tickets and My Pull Requests sections"
                 },

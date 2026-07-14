@@ -442,12 +442,56 @@ export function registerCommands(
     );
 
     disposables.push(
+        vscode.commands.registerCommand('keepr.setMyItemsTicketStates', async () => {
+            const states = await treeProvider.getAvailableMyTicketStates();
+            if (states.length === 0) {
+                vscode.window.showInformationMessage('KeepR: No ticket states available yet. Refresh My Items first.');
+                return;
+            }
+
+            const config = vscode.workspace.getConfiguration('keepr');
+            const current = new Set(config.get<string[]>('myItems.ticketVisibleStates', []));
+            const picks = await vscode.window.showQuickPick(
+                states.map((state) => ({ label: state, picked: current.size === 0 ? !isCompletedState(state, 'ticket') : current.has(state) })),
+                { placeHolder: 'Visible ticket states', canPickMany: true },
+            );
+            if (!picks) { return; }
+
+            await config.update('myItems.ticketVisibleStates', picks.map((pick) => pick.label), vscode.ConfigurationTarget.Global);
+            refreshMyItemsViews();
+        }),
+    );
+
+    disposables.push(
+        vscode.commands.registerCommand('keepr.setMyItemsPrStates', async () => {
+            const states = await treeProvider.getAvailableMyPrStates();
+            if (states.length === 0) {
+                vscode.window.showInformationMessage('KeepR: No pull request states available yet. Refresh My Items first.');
+                return;
+            }
+
+            const config = vscode.workspace.getConfiguration('keepr');
+            const current = new Set(config.get<string[]>('myItems.prVisibleStates', []));
+            const picks = await vscode.window.showQuickPick(
+                states.map((state) => ({ label: state, picked: current.size === 0 ? !isCompletedState(state, 'pr') : current.has(state) })),
+                { placeHolder: 'Visible pull request states', canPickMany: true },
+            );
+            if (!picks) { return; }
+
+            await config.update('myItems.prVisibleStates', picks.map((pick) => pick.label), vscode.ConfigurationTarget.Global);
+            refreshMyItemsViews();
+        }),
+    );
+
+    disposables.push(
         vscode.commands.registerCommand('keepr.setMyItemsSort', async () => {
             const options = [
                 { label: 'Updated (Newest first)', value: 'updated' },
                 { label: 'Created (Newest first)', value: 'created' },
                 { label: 'Title (A-Z)', value: 'title' },
                 { label: 'Provider (A-Z)', value: 'provider' },
+                { label: 'Type (A-Z)', value: 'type' },
+                { label: 'Status (A-Z)', value: 'status' },
             ];
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Items sort order' });
             if (!pick) { return; }
@@ -754,4 +798,13 @@ export function registerCommands(
     );
 
     return disposables;
+
+    function isCompletedState(state: string, scope: 'ticket' | 'pr'): boolean {
+        const normalized = state.trim().toLowerCase();
+        if (scope === 'pr') {
+            return ['completed', 'abandoned', 'closed', 'merged', 'declined'].includes(normalized);
+        }
+
+        return ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'].includes(normalized);
+    }
 }

@@ -13,6 +13,14 @@ interface AzureIdentity {
     displayName?: string;
 }
 
+interface AzureActor {
+    id?: string;
+    descriptor?: string;
+    uniqueName?: string;
+    displayName?: string;
+    mailAddress?: string;
+}
+
 export class AzureDevOpsProvider implements TicketProvider {
     readonly id = 'azureDevOps' as const;
     readonly displayName = 'Azure DevOps';
@@ -174,7 +182,8 @@ export class AzureDevOpsProvider implements TicketProvider {
         };
 
         const identity = await this.getCurrentIdentity(headers);
-        if (!identity.id && !identity.descriptor && !identity.uniqueName && !identity.displayName) {
+        const fallbackDisplayNames = await this.getFallbackDisplayNames(headers);
+        if (!identity.id && !identity.descriptor && !identity.uniqueName && !identity.displayName && fallbackDisplayNames.length === 0) {
             return [];
         }
 
@@ -187,7 +196,7 @@ export class AzureDevOpsProvider implements TicketProvider {
         }
 
         // Fallback path for cases where reviewer/creator identity filters miss active PRs.
-        const fallback = await this.queryActivePullRequestsAcrossRepos(project, identity, headers);
+        const fallback = await this.queryActivePullRequestsAcrossRepos(project, identity, fallbackDisplayNames, headers);
         collected.push(...fallback);
 
         const map = new Map<string, UserRelatedPullRequestInfo>();
@@ -510,7 +519,7 @@ export class AzureDevOpsProvider implements TicketProvider {
         if (this.authWarningShown) { return; }
         this.authWarningShown = true;
         vscode.window.showWarningMessage(
-            'KeepR: Azure DevOps token missing permissions for full details. Required scopes: Work Items (Read) and Code (Read).',
+            'KeepR: Azure DevOps token or project permissions are insufficient for full details/My PRs. Ensure PAT scopes include Work Items (Read) and Code (Read), and that the account has access to the target repositories.',
         );
     }
 
@@ -564,6 +573,9 @@ export class AzureDevOpsProvider implements TicketProvider {
         try {
             const url = `${this.normalizeUrl(orgUrl)}/_apis/connectionData?connectOptions=IncludeServices&lastChangeId=-1&lastChangeId64=-1&api-version=7.0`;
             const resp = await fetch(url, { headers });
+            if (resp.status === 401 || resp.status === 403) {
+                this.warnAuthScopeIssue();
+            }
             if (!resp.ok) { return {}; }
             const data = await resp.json() as {
                 authenticatedUser?: { id?: string; descriptor?: string; uniqueName?: string; providerDisplayName?: string; customDisplayName?: string };
@@ -585,6 +597,7 @@ export class AzureDevOpsProvider implements TicketProvider {
     private async queryActivePullRequestsAcrossRepos(
         project: string,
         identity: AzureIdentity,
+        fallbackDisplayNames: string[],
         headers: Record<string, string>,
     ): Promise<UserRelatedPullRequestInfo[]> {
         const orgUrl = this.orgUrl;
@@ -594,6 +607,9 @@ export class AzureDevOpsProvider implements TicketProvider {
             const base = this.normalizeUrl(orgUrl);
             const reposUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories?api-version=7.0`;
             const reposResp = await fetch(reposUrl, { headers });
+            if (reposResp.status === 401 || reposResp.status === 403) {
+                this.warnAuthScopeIssue();
+            }
             if (!reposResp.ok) { return []; }
 
             const reposData = await reposResp.json() as {
@@ -608,6 +624,9 @@ export class AzureDevOpsProvider implements TicketProvider {
 
                 const prsUrl = `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/pullrequests?searchCriteria.status=active&$top=200&api-version=7.0`;
                 const prsResp = await fetch(prsUrl, { headers });
+                if (prsResp.status === 401 || prsResp.status === 403) {
+                    this.warnAuthScopeIssue();
+                }
                 if (!prsResp.ok) { continue; }
 
                 const prsData = await prsResp.json() as {
@@ -620,14 +639,14 @@ export class AzureDevOpsProvider implements TicketProvider {
                         targetRefName?: string;
                         creationDate?: string;
                         closedDate?: string;
-                        createdBy?: { id?: string; uniqueName?: string; displayName?: string };
-                        reviewers?: Array<{ id?: string; uniqueName?: string; displayName?: string; vote?: number }>;
+                        createdBy?: AzureActor;
+                        reviewers?: Array<AzureActor & { vote?: number }>;
                     }>;
                 };
 
                 for (const pr of prsData.value ?? []) {
-                    const isAuthor = this.matchesIdentity(pr.createdBy, identity);
-                    const myReview = pr.reviewers?.find((r) => this.matchesIdentity(r, identity));
+                    const isAuthor = this.matchesIdentity(pr.createdBy, identity, fallbackDisplayNames);
+                    const myReview = pr.reviewers?.find((r) => this.matchesIdentity(r, identity, fallbackDisplayNames));
                     const isReviewer = !!myReview;
                     if (!isAuthor && !isReviewer) { continue; }
 
@@ -663,24 +682,81 @@ export class AzureDevOpsProvider implements TicketProvider {
     }
 
     private matchesIdentity(
-        actor: { id?: string; uniqueName?: string; displayName?: string } | undefined,
+        actor: AzureActor | undefined,
         identity: AzureIdentity,
+        fallbackDisplayNames: string[] = [],
     ): boolean {
         if (!actor) { return false; }
         const actorId = (actor.id ?? '').toLowerCase();
+        const actorDescriptor = (actor.descriptor ?? '').toLowerCase();
         const actorUnique = (actor.uniqueName ?? '').toLowerCase();
         const actorDisplay = (actor.displayName ?? '').toLowerCase();
+        const actorMail = (actor.mailAddress ?? '').toLowerCase();
 
         const identityIds = [identity.id, identity.descriptor].filter(Boolean).map((v) => String(v).toLowerCase());
         const identityUnique = (identity.uniqueName ?? '').toLowerCase();
         const identityDisplay = (identity.displayName ?? '').toLowerCase();
+        const fallbackDisplays = fallbackDisplayNames.map((name) => name.toLowerCase());
 
         if (actorId && identityIds.includes(actorId)) { return true; }
+        if (actorDescriptor && identityIds.includes(actorDescriptor)) { return true; }
         if (actorUnique && identityIds.includes(actorUnique)) { return true; }
+        if (actorMail && identityIds.includes(actorMail)) { return true; }
         if (identityUnique && (actorUnique === identityUnique || actorId === identityUnique)) { return true; }
         if (identityDisplay && actorDisplay && actorDisplay === identityDisplay) { return true; }
+        if (fallbackDisplays.length > 0 && actorDisplay && fallbackDisplays.includes(actorDisplay)) { return true; }
 
         return false;
+    }
+
+    private async getFallbackDisplayNames(headers: Record<string, string>): Promise<string[]> {
+        const names = new Set<string>();
+        if (this._config) {
+            for (const name of await this.getMyDisplayNamesFromTickets(headers)) {
+                if (name) { names.add(name); }
+            }
+        }
+        return [...names];
+    }
+
+    private async getMyDisplayNamesFromTickets(headers: Record<string, string>): Promise<string[]> {
+        const orgUrl = this.orgUrl;
+        const project = this.project;
+        if (!orgUrl || !project) { return []; }
+
+        try {
+            const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${project}' AND [System.AssignedTo] = @Me ORDER BY [System.ChangedDate] DESC`;
+            const wiqlUrl = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/wit/wiql?api-version=7.0&$top=10`;
+            const wiqlResp = await fetch(wiqlUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: headers.Authorization,
+                },
+                body: JSON.stringify({ query: wiql }),
+            });
+            if (!wiqlResp.ok) { return []; }
+
+            const wiqlData = await wiqlResp.json() as { workItems?: { id: number }[] };
+            const ids = wiqlData.workItems?.map((w) => w.id) ?? [];
+            if (ids.length === 0) { return []; }
+
+            const batchUrl = `${this.normalizeUrl(orgUrl)}/_apis/wit/workitems?ids=${ids.join(',')}&fields=System.AssignedTo&api-version=7.0`;
+            const batchResp = await fetch(batchUrl, { headers: { Authorization: headers.Authorization } });
+            if (!batchResp.ok) { return []; }
+
+            const batchData = await batchResp.json() as { value?: { fields: Record<string, any> }[] };
+            const names = new Set<string>();
+            for (const wi of batchData.value ?? []) {
+                const displayName = wi.fields?.['System.AssignedTo']?.displayName;
+                if (typeof displayName === 'string' && displayName.trim()) {
+                    names.add(displayName.trim());
+                }
+            }
+            return [...names];
+        } catch {
+            return [];
+        }
     }
 
     private async queryMyPullRequests(
@@ -698,6 +774,9 @@ export class AzureDevOpsProvider implements TicketProvider {
                 : `searchCriteria.creatorId=${encodeURIComponent(identityId)}`;
             const url = `${this.normalizeUrl(orgUrl)}/${encodeURIComponent(project)}/_apis/git/pullrequests?${criteria}&searchCriteria.status=all&$top=50&api-version=7.0`;
             const resp = await fetch(url, { headers });
+            if (resp.status === 401 || resp.status === 403) {
+                this.warnAuthScopeIssue();
+            }
             if (!resp.ok) { return []; }
 
             const data = await resp.json() as {

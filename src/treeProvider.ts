@@ -6,7 +6,7 @@ import { ProviderManager, TicketDetails } from './providers';
 import { AggregatedMyPullRequest, AggregatedMyTicket } from './providers/providerManager';
 
 type GroupBy = 'repo' | 'file' | 'status' | 'ticket';
-type MyItemsSort = 'updated' | 'created' | 'title' | 'provider';
+type MyItemsSort = 'updated' | 'created' | 'title' | 'provider' | 'type' | 'status';
 export type TreeMode = 'bookmarks' | 'tickets' | 'prs';
 
 /** Union of all node types in the tree */
@@ -558,6 +558,16 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     this.refresh();
   }
 
+  async getAvailableMyTicketStates(): Promise<string[]> {
+    await this.ensureMyItemsLoaded();
+    return [...new Set((this.myTicketsCache ?? []).map((item) => item.item.state).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  }
+
+  async getAvailableMyPrStates(): Promise<string[]> {
+    await this.ensureMyItemsLoaded();
+    return [...new Set((this.myPrsCache ?? []).map((item) => item.item.status || item.item.state).filter(Boolean) as string[])].sort((a, b) => a.localeCompare(b));
+  }
+
   private isMyItemsEnabled(): boolean {
     return vscode.workspace.getConfiguration('keepr').get<boolean>('myItems.enabled', true);
   }
@@ -589,20 +599,120 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     const all = [...(this.myTicketsCache ?? [])];
     const config = vscode.workspace.getConfiguration('keepr');
     const filter = config.get<string>('myItems.ticketFilter', 'all');
+    const visibleStates = config.get<string[]>('myItems.ticketVisibleStates', []);
     const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
 
-    const filtered = filter === 'all' ? all : all.filter((t) => (t.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
-    return filtered.sort((a, b) => this.compareMyItems(a.item.title, b.item.title, a.providerLabel, b.providerLabel, a.item.updatedAt, b.item.updatedAt, a.item.createdAt, b.item.createdAt, sortBy));
+    const relationFiltered = filter === 'all' ? all : all.filter((t) => (t.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
+    const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.state, 'ticket');
+    return stateFiltered.sort((a, b) => {
+      const stateOrder = this.compareTicketStatePriority(a.item.state, b.item.state);
+      if (stateOrder !== 0) { return stateOrder; }
+
+      return this.compareMyItems(
+        a.item.title,
+        b.item.title,
+        a.providerLabel,
+        b.providerLabel,
+        a.item.updatedAt,
+        b.item.updatedAt,
+        a.item.createdAt,
+        b.item.createdAt,
+        a.item.type,
+        b.item.type,
+        a.item.state,
+        b.item.state,
+        sortBy,
+      );
+    });
   }
 
   private getFilteredSortedMyPrs(): AggregatedMyPullRequest[] {
     const all = [...(this.myPrsCache ?? [])];
     const config = vscode.workspace.getConfiguration('keepr');
     const filter = config.get<string>('myItems.prFilter', 'all');
+    const visibleStates = config.get<string[]>('myItems.prVisibleStates', []);
     const sortBy = config.get<MyItemsSort>('myItems.sortBy', 'updated');
 
-    const filtered = filter === 'all' ? all : all.filter((p) => (p.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
-    return filtered.sort((a, b) => this.compareMyItems(a.item.title, b.item.title, a.providerLabel, b.providerLabel, a.item.updatedAt, b.item.updatedAt, a.item.createdAt, b.item.createdAt, sortBy));
+    const relationFiltered = filter === 'all' ? all : all.filter((p) => (p.item.relation ?? '').toLowerCase().includes(filter.toLowerCase()));
+    const stateFiltered = this.filterByVisibleStates(relationFiltered, visibleStates, (item) => item.item.status || item.item.state, 'pr');
+    return stateFiltered.sort((a, b) => this.compareMyItems(
+      a.item.title,
+      b.item.title,
+      a.providerLabel,
+      b.providerLabel,
+      a.item.updatedAt,
+      b.item.updatedAt,
+      a.item.createdAt,
+      b.item.createdAt,
+      undefined,
+      undefined,
+      a.item.status || a.item.state,
+      b.item.status || b.item.state,
+      sortBy,
+    ));
+  }
+
+  private filterByVisibleStates<T>(
+    items: T[],
+    visibleStates: string[],
+    getState: (item: T) => string | undefined,
+    scope: 'ticket' | 'pr',
+  ): T[] {
+    if (visibleStates.length > 0) {
+      const allowed = new Set(visibleStates.map((state) => state.toLowerCase()));
+      return items.filter((item) => {
+        const state = getState(item);
+        return !state || allowed.has(state.toLowerCase());
+      });
+    }
+
+    return items.filter((item) => !this.isCompletedState(getState(item), scope));
+  }
+
+  private isCompletedState(state: string | undefined, scope: 'ticket' | 'pr'): boolean {
+    const normalized = (state ?? '').trim().toLowerCase();
+    if (!normalized) { return false; }
+
+    if (scope === 'pr') {
+      return ['completed', 'abandoned', 'closed', 'merged', 'declined'].includes(normalized);
+    }
+
+    return ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'].includes(normalized);
+  }
+
+  private compareTicketStatePriority(stateA: string | undefined, stateB: string | undefined): number {
+    return this.ticketStatePriority(stateA) - this.ticketStatePriority(stateB);
+  }
+
+  private ticketStatePriority(state: string | undefined): number {
+    const normalized = (state ?? '').trim().toLowerCase();
+    if (!normalized) { return 50; }
+
+    if (this.matchesAny(normalized, ['active', 'in progress', 'committed', 'doing', 'open', 'current', 'started'])) {
+      return 10;
+    }
+
+    if (this.matchesAny(normalized, ['todo', 'to do', 'new', 'approved', 'ready', 'planned', 'backlog'])) {
+      return 20;
+    }
+
+    if (this.matchesAny(normalized, ['pr', 'pull request', 'review', 'testing', 'test', 'qa', 'verify', 'validation'])) {
+      return 30;
+    }
+
+    if (this.matchesAny(normalized, ['blocked', 'waiting', 'hold'])) {
+      return 40;
+    }
+
+    if (this.matchesAny(normalized, ['done', 'closed', 'resolved', 'removed', 'completed', 'abandoned', 'cancelled', 'canceled'])) {
+      return 90;
+    }
+
+    return 50;
+  }
+
+  private matchesAny(value: string, patterns: string[]): boolean {
+    return patterns.some((pattern) => value.includes(pattern));
   }
 
   private compareMyItems(
@@ -614,6 +724,10 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     updatedB: string | undefined,
     createdA: string | undefined,
     createdB: string | undefined,
+    typeA: string | undefined,
+    typeB: string | undefined,
+    statusA: string | undefined,
+    statusB: string | undefined,
     sortBy: MyItemsSort,
   ): number {
     switch (sortBy) {
@@ -621,6 +735,10 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         return titleA.localeCompare(titleB);
       case 'provider':
         return providerA.localeCompare(providerB);
+      case 'type':
+        return (typeA ?? '').localeCompare(typeB ?? '') || titleA.localeCompare(titleB);
+      case 'status':
+        return (statusA ?? '').localeCompare(statusB ?? '') || titleA.localeCompare(titleB);
       case 'created':
         return (Date.parse(createdB ?? '') || 0) - (Date.parse(createdA ?? '') || 0);
       case 'updated':
