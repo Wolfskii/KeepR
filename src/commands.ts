@@ -20,10 +20,27 @@ export function registerCommands(
 ): vscode.Disposable[] {
     const disposables: vscode.Disposable[] = [];
 
-    const refreshMyItemsViews = (): void => {
-        treeProvider.refreshMyItems();
+    const refreshMyItemsViews = (hardRefresh = false): void => {
+        treeProvider.refreshMyItems(hardRefresh);
         for (const provider of myItemsTreeProviders) {
-            provider.refreshMyItems();
+            provider.refreshMyItems(hardRefresh);
+        }
+    };
+
+    const refreshMyItemsByScope = (scope: 'tickets' | 'prs' | 'all', hardRefresh = false): void => {
+        const providersToRefresh = [treeProvider, ...myItemsTreeProviders];
+        for (const provider of providersToRefresh) {
+            const mode = provider.getMode();
+            if (scope === 'all') {
+                provider.refreshMyItems(hardRefresh);
+                continue;
+            }
+            if (scope === 'tickets' && (mode === 'bookmarks' || mode === 'tickets')) {
+                provider.refreshMyItems(hardRefresh);
+            }
+            if (scope === 'prs' && (mode === 'bookmarks' || mode === 'prs')) {
+                provider.refreshMyItems(hardRefresh);
+            }
         }
     };
 
@@ -407,7 +424,7 @@ export function registerCommands(
 
     disposables.push(
         vscode.commands.registerCommand('keepr.refreshMyItems', () => {
-            refreshMyItemsViews();
+            refreshMyItemsViews(true);
             vscode.window.showInformationMessage('KeepR: My Tickets/PRs refreshed.');
         }),
     );
@@ -463,7 +480,7 @@ export function registerCommands(
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Tickets filter' });
             if (!pick) { return; }
             await vscode.workspace.getConfiguration('keepr').update('myItems.ticketFilter', pick.value, vscode.ConfigurationTarget.Global);
-            refreshMyItemsViews();
+            refreshMyItemsByScope('tickets');
         }),
     );
 
@@ -481,13 +498,18 @@ export function registerCommands(
             const pick = await vscode.window.showQuickPick(options, { placeHolder: 'My Pull Requests filter' });
             if (!pick) { return; }
             await vscode.workspace.getConfiguration('keepr').update('myItems.prFilter', pick.value, vscode.ConfigurationTarget.Global);
-            refreshMyItemsViews();
+            refreshMyItemsByScope('prs');
         }),
     );
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setMyItemsTicketStates', async () => {
-            const states = await treeProvider.getAvailableMyTicketStates();
+            const statesByProvider = await Promise.all(
+                allTreeProviders
+                    .filter((provider) => provider.getMode() === 'bookmarks' || provider.getMode() === 'tickets')
+                    .map((provider) => provider.getAvailableMyTicketStates().catch(() => [])),
+            );
+            const states = [...new Set(statesByProvider.flat())].sort((a, b) => a.localeCompare(b));
             if (states.length === 0) {
                 vscode.window.showInformationMessage('KeepR: No ticket states available yet. Refresh My Items first.');
                 return;
@@ -502,13 +524,18 @@ export function registerCommands(
             if (!picks) { return; }
 
             await config.update('myItems.ticketVisibleStates', picks.map((pick) => pick.label), vscode.ConfigurationTarget.Global);
-            refreshMyItemsViews();
+            refreshMyItemsByScope('tickets');
         }),
     );
 
     disposables.push(
         vscode.commands.registerCommand('keepr.setMyItemsPrStates', async () => {
-            const states = await treeProvider.getAvailableMyPrStates();
+            const statesByProvider = await Promise.all(
+                allTreeProviders
+                    .filter((provider) => provider.getMode() === 'bookmarks' || provider.getMode() === 'prs')
+                    .map((provider) => provider.getAvailableMyPrStates().catch(() => [])),
+            );
+            const states = [...new Set(statesByProvider.flat())].sort((a, b) => a.localeCompare(b));
             if (states.length === 0) {
                 vscode.window.showInformationMessage('KeepR: No pull request states available yet. Refresh My Items first.');
                 return;
@@ -523,7 +550,7 @@ export function registerCommands(
             if (!picks) { return; }
 
             await config.update('myItems.prVisibleStates', picks.map((pick) => pick.label), vscode.ConfigurationTarget.Global);
-            refreshMyItemsViews();
+            refreshMyItemsByScope('prs');
         }),
     );
 

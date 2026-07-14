@@ -56,6 +56,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         treeDataProvider: myPrsTreeProvider,
     });
 
+    // Warm My Items cache in background so filters/views are responsive when opened.
+    if (vscode.workspace.getConfiguration('keepr').get<boolean>('myItems.enabled', true)) {
+        void providers.getMyTicketsAcrossProviders().catch(() => undefined);
+        void providers.getMyPullRequestsAcrossProviders().catch(() => undefined);
+    }
+
     // Refresh tree when provider changes
     providers.onDidChangeProvider(() => {
         treeProvider.refreshWorkItems();

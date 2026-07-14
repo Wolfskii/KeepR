@@ -19,6 +19,13 @@ export class ProviderManager {
     private _activeProvider: TicketProvider | undefined;
     private _activeConnectionId: string | undefined;
 
+    private myTicketsCache: { items: AggregatedMyTicket[]; fetchedAt: number } | undefined;
+    private myPrsCache: { items: AggregatedMyPullRequest[]; fetchedAt: number } | undefined;
+    private myTicketsLoadingPromise: Promise<AggregatedMyTicket[]> | undefined;
+    private myPrsLoadingPromise: Promise<AggregatedMyPullRequest[]> | undefined;
+
+    private static MY_ITEMS_CACHE_TTL = 2 * 60 * 1000;
+
     private readonly _onDidChangeProvider = new vscode.EventEmitter<ProviderId | undefined>();
     readonly onDidChangeProvider = this._onDidChangeProvider.event;
 
@@ -153,49 +160,56 @@ export class ProviderManager {
     }
 
     /** Tickets related to the logged-in user across all configured providers. */
-    async getMyTicketsAcrossProviders(): Promise<AggregatedMyTicket[]> {
-        const providers = this.getConfiguredProviders();
-        const all: AggregatedMyTicket[] = [];
-
-        for (const entry of providers) {
-            try {
-                const items = await entry.provider.getMyTickets();
-                for (const item of items) {
-                    all.push({
-                        providerId: entry.provider.id,
-                        providerLabel: entry.label,
-                        item,
-                    });
-                }
-            } catch {
-                // Ignore provider-specific failures to keep merged results usable.
-            }
+    async getMyTicketsAcrossProviders(forceRefresh = false): Promise<AggregatedMyTicket[]> {
+        const now = Date.now();
+        const cache = this.myTicketsCache;
+        if (!forceRefresh && cache && (now - cache.fetchedAt) < ProviderManager.MY_ITEMS_CACHE_TTL) {
+            return cache.items;
         }
 
-        return this.dedupeMyTickets(all);
+        if (this.myTicketsLoadingPromise) {
+            return this.myTicketsLoadingPromise;
+        }
+
+        const startedAt = Date.now();
+        this.myTicketsLoadingPromise = this.fetchMyTicketsAcrossProviders().then((items) => {
+            this.myTicketsCache = { items, fetchedAt: Date.now() };
+            console.info(`KeepR: ProviderManager tickets fetch finished in ${Date.now() - startedAt}ms (tickets=${items.length})`);
+            return items;
+        }).finally(() => {
+            this.myTicketsLoadingPromise = undefined;
+        });
+
+        return this.myTicketsLoadingPromise;
     }
 
     /** Pull requests related to the logged-in user across all configured providers. */
-    async getMyPullRequestsAcrossProviders(): Promise<AggregatedMyPullRequest[]> {
-        const providers = this.getConfiguredProviders();
-        const all: AggregatedMyPullRequest[] = [];
-
-        for (const entry of providers) {
-            try {
-                const items = await entry.provider.getMyPullRequests();
-                for (const item of items) {
-                    all.push({
-                        providerId: entry.provider.id,
-                        providerLabel: entry.label,
-                        item,
-                    });
-                }
-            } catch {
-                // Ignore provider-specific failures to keep merged results usable.
-            }
+    async getMyPullRequestsAcrossProviders(forceRefresh = false): Promise<AggregatedMyPullRequest[]> {
+        const now = Date.now();
+        const cache = this.myPrsCache;
+        if (!forceRefresh && cache && (now - cache.fetchedAt) < ProviderManager.MY_ITEMS_CACHE_TTL) {
+            return cache.items;
         }
 
-        return this.dedupeMyPullRequests(all);
+        if (this.myPrsLoadingPromise) {
+            return this.myPrsLoadingPromise;
+        }
+
+        const startedAt = Date.now();
+        this.myPrsLoadingPromise = this.fetchMyPullRequestsAcrossProviders().then((items) => {
+            this.myPrsCache = { items, fetchedAt: Date.now() };
+            console.info(`KeepR: ProviderManager PRs fetch finished in ${Date.now() - startedAt}ms (prs=${items.length})`);
+            return items;
+        }).finally(() => {
+            this.myPrsLoadingPromise = undefined;
+        });
+
+        return this.myPrsLoadingPromise;
+    }
+
+    clearMyItemsCache(): void {
+        this.myTicketsCache = undefined;
+        this.myPrsCache = undefined;
     }
 
     /** Get ticket details using the active provider */
@@ -216,6 +230,44 @@ export class ProviderManager {
     /** Clear all cached data */
     clearCache(): void {
         this.activeProvider?.clearCache();
+        this.clearMyItemsCache();
+    }
+
+    private async fetchMyTicketsAcrossProviders(): Promise<AggregatedMyTicket[]> {
+        const providers = this.getConfiguredProviders();
+        const settled = await Promise.all(providers.map(async (entry) => {
+            try {
+                const items = await entry.provider.getMyTickets();
+                return items.map((item) => ({
+                    providerId: entry.provider.id,
+                    providerLabel: entry.label,
+                    item,
+                } as AggregatedMyTicket));
+            } catch {
+                return [] as AggregatedMyTicket[];
+            }
+        }));
+
+        return this.dedupeMyTickets(settled.flatMap((s) => s));
+    }
+
+    private async fetchMyPullRequestsAcrossProviders(): Promise<AggregatedMyPullRequest[]> {
+        const providers = this.getConfiguredProviders();
+
+        const settled = await Promise.all(providers.map(async (entry) => {
+            try {
+                const items = await entry.provider.getMyPullRequests();
+                return items.map((item) => ({
+                    providerId: entry.provider.id,
+                    providerLabel: entry.label,
+                    item,
+                } as AggregatedMyPullRequest));
+            } catch {
+                return [] as AggregatedMyPullRequest[];
+            }
+        }));
+
+        return this.dedupeMyPullRequests(settled.flatMap((s) => s));
     }
 
     private getConfiguredProviders(): Array<{ provider: TicketProvider; label: string }> {

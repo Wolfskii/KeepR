@@ -104,6 +104,7 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private loadingMyItems = false;
   private refreshingMyItems = false;
   private myItemsFetchedAt = 0;
+  private myItemsLoadingPromise: Promise<void> | undefined;
   private expandedMyTickets = new Set<string>();
   private expandedMyPrs = new Set<string>();
   private expandedDescriptions = new Set<string>();
@@ -127,6 +128,10 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   refresh(): void {
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  getMode(): TreeMode {
+    return this.mode;
   }
 
   setGroupBy(groupBy: GroupBy): void {
@@ -200,11 +205,11 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (!element) {
       if (this.mode === 'tickets') {
-        await this.ensureMyItemsLoaded();
+        await this.ensureMyItemsLoaded('tickets');
         return this.getFilteredSortedMyTickets().map((item) => new MyTicketNode(item));
       }
       if (this.mode === 'prs') {
-        await this.ensureMyItemsLoaded();
+        await this.ensureMyItemsLoaded('prs');
         return this.getFilteredSortedMyPrs().map((item) => new MyPrNode(item));
       }
       return this.getRoots();
@@ -220,10 +225,10 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       case 'bookmark':
         return [];
       case 'myTicketsSection':
-        await this.ensureMyItemsLoaded();
+        await this.ensureMyItemsLoaded('tickets');
         return this.getFilteredSortedMyTickets().map((item) => new MyTicketNode(item));
       case 'myPrsSection':
-        await this.ensureMyItemsLoaded();
+        await this.ensureMyItemsLoaded('prs');
         return this.getFilteredSortedMyPrs().map((item) => new MyPrNode(item));
       case 'myTicket':
         return this.expandedMyTickets.has(this.myTicketKey(element.item))
@@ -937,21 +942,24 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     this.refresh();
   }
 
-  refreshMyItems(): void {
-    this.myTicketsCache = undefined;
-    this.myPrsCache = undefined;
-    this.myItemsFetchedAt = 0;
-    this.refreshingMyItems = false;
+  refreshMyItems(hardRefresh = false): void {
+    if (hardRefresh) {
+      this.myTicketsCache = undefined;
+      this.myPrsCache = undefined;
+      this.myItemsFetchedAt = 0;
+      this.refreshingMyItems = false;
+      this.providers?.clearMyItemsCache?.();
+    }
     this.refresh();
   }
 
   async getAvailableMyTicketStates(): Promise<string[]> {
-    await this.ensureMyItemsLoaded();
+    await this.ensureMyItemsLoaded('tickets');
     return [...new Set((this.myTicketsCache ?? []).map((item) => item.item.state).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   }
 
   async getAvailableMyPrStates(): Promise<string[]> {
-    await this.ensureMyItemsLoaded();
+    await this.ensureMyItemsLoaded('prs');
     const knownStates = ['active', 'completed', 'abandoned', 'closed', 'merged', 'declined', 'draft'];
     const discoveredStates = (this.myPrsCache ?? [])
       .map((item) => item.item.status || item.item.state)
@@ -965,32 +973,66 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     return vscode.workspace.getConfiguration('keepr').get<boolean>('myItems.enabled', true);
   }
 
-  private async ensureMyItemsLoaded(): Promise<void> {
-    if (this.loadingMyItems) { return; }
-    if (this.myTicketsCache && this.myPrsCache) {
-      if (this.isMyItemsCacheStale()) {
-        this.refreshMyItemsInBackground();
-      }
-      return;
-    }
-    if (!this.providers) {
-      this.myTicketsCache = [];
-      this.myPrsCache = [];
-      this.myItemsFetchedAt = Date.now();
+  private async ensureMyItemsLoaded(scope: 'tickets' | 'prs' | 'both' = 'both'): Promise<void> {
+    const needsTickets = scope === 'tickets' || scope === 'both';
+    const needsPrs = scope === 'prs' || scope === 'both';
+
+    if (this.loadingMyItems && this.myItemsLoadingPromise) {
+      await this.myItemsLoadingPromise;
       return;
     }
 
+    const hasTickets = !needsTickets || !!this.myTicketsCache;
+    const hasPrs = !needsPrs || !!this.myPrsCache;
+    if (hasTickets && hasPrs) {
+      if (this.isMyItemsCacheStale()) {
+        this.refreshMyItemsInBackground(scope);
+      }
+      return;
+    }
+
+    if (!this.providers) {
+      if (needsTickets) { this.myTicketsCache = []; }
+      if (needsPrs) { this.myPrsCache = []; }
+      this.myItemsFetchedAt = Date.now();
+      return;
+    }
+    const providers = this.providers;
+
     this.loadingMyItems = true;
-    try {
+    const startedAt = Date.now();
+    this.myItemsLoadingPromise = (async () => {
+      if (needsTickets && !needsPrs) {
+        const tickets = await providers.getMyTicketsAcrossProviders();
+        this.myTicketsCache = tickets;
+        this.myItemsFetchedAt = Date.now();
+        console.info(`KeepR: My Tickets load finished in ${Date.now() - startedAt}ms (tickets=${tickets.length})`);
+        return;
+      }
+
+      if (needsPrs && !needsTickets) {
+        const prs = await providers.getMyPullRequestsAcrossProviders();
+        this.myPrsCache = prs;
+        this.myItemsFetchedAt = Date.now();
+        console.info(`KeepR: My PRs load finished in ${Date.now() - startedAt}ms (prs=${prs.length})`);
+        return;
+      }
+
       const [tickets, prs] = await Promise.all([
-        this.providers.getMyTicketsAcrossProviders(),
-        this.providers.getMyPullRequestsAcrossProviders(),
+        providers.getMyTicketsAcrossProviders(),
+        providers.getMyPullRequestsAcrossProviders(),
       ]);
       this.myTicketsCache = tickets;
       this.myPrsCache = prs;
       this.myItemsFetchedAt = Date.now();
+      console.info(`KeepR: My Items initial load finished in ${Date.now() - startedAt}ms (tickets=${tickets.length}, prs=${prs.length})`);
+    })();
+
+    try {
+      await this.myItemsLoadingPromise;
     } finally {
       this.loadingMyItems = false;
+      this.myItemsLoadingPromise = undefined;
       this._onDidChangeTreeData.fire(undefined);
     }
   }
@@ -1000,20 +1042,40 @@ export class BookmarkTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     return (Date.now() - this.myItemsFetchedAt) > BookmarkTreeProvider.MY_ITEMS_CACHE_TTL;
   }
 
-  private refreshMyItemsInBackground(): void {
+  private refreshMyItemsInBackground(scope: 'tickets' | 'prs' | 'both' = 'both'): void {
     if (this.loadingMyItems || this.refreshingMyItems || !this.providers) { return; }
+    const providers = this.providers;
 
     this.refreshingMyItems = true;
     this._onDidChangeTreeData.fire(undefined);
+    const startedAt = Date.now();
 
-    Promise.all([
-      this.providers.getMyTicketsAcrossProviders(),
-      this.providers.getMyPullRequestsAcrossProviders(),
-    ]).then(([tickets, prs]) => {
-      this.myTicketsCache = tickets;
-      this.myPrsCache = prs;
-      this.myItemsFetchedAt = Date.now();
-    }).catch(() => {
+    const needsTickets = scope === 'tickets' || scope === 'both';
+    const needsPrs = scope === 'prs' || scope === 'both';
+
+    const refreshPromise = needsTickets && needsPrs
+      ? Promise.all([
+        providers.getMyTicketsAcrossProviders(true),
+        providers.getMyPullRequestsAcrossProviders(true),
+      ]).then(([tickets, prs]) => {
+        this.myTicketsCache = tickets;
+        this.myPrsCache = prs;
+        this.myItemsFetchedAt = Date.now();
+        console.info(`KeepR: My Items background refresh finished in ${Date.now() - startedAt}ms (tickets=${tickets.length}, prs=${prs.length})`);
+      })
+      : needsTickets
+        ? providers.getMyTicketsAcrossProviders(true).then((tickets) => {
+          this.myTicketsCache = tickets;
+          this.myItemsFetchedAt = Date.now();
+          console.info(`KeepR: My Tickets background refresh finished in ${Date.now() - startedAt}ms (tickets=${tickets.length})`);
+        })
+        : providers.getMyPullRequestsAcrossProviders(true).then((prs) => {
+          this.myPrsCache = prs;
+          this.myItemsFetchedAt = Date.now();
+          console.info(`KeepR: My PRs background refresh finished in ${Date.now() - startedAt}ms (prs=${prs.length})`);
+        });
+
+    refreshPromise.catch(() => {
       // Keep stale cache data if refresh fails.
     }).finally(() => {
       this.refreshingMyItems = false;
