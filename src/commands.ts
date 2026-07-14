@@ -425,6 +425,15 @@ export function registerCommands(
     );
 
     disposables.push(
+        vscode.commands.registerCommand('keepr.toggleDescriptionExpand', async (descId?: string) => {
+            if (!descId) { return; }
+            for (const provider of allTreeProviders) {
+                provider.toggleDescriptionExpand(descId);
+            }
+        }),
+    );
+
+    disposables.push(
         vscode.commands.registerCommand('keepr.openMyItemInBrowser', async (arg?: string | { item?: { item?: { url?: string } } }) => {
             const url = typeof arg === 'string' ? arg : arg?.item?.item?.url;
             if (!url) { return; }

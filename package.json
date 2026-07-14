@@ -136,6 +136,10 @@
                 "title": "KeepR: Toggle My Item Details"
             },
             {
+                "command": "keepr.toggleDescriptionExpand",
+                "title": "KeepR: Toggle Description Expand"
+            },
+            {
                 "command": "keepr.openMyItemInBrowser",
                 "title": "KeepR: Open My Item in Browser",
                 "icon": "$(globe)"
